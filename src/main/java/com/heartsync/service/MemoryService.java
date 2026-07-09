@@ -196,10 +196,12 @@ public class MemoryService {
     }
 
     /**
-     * 将抽取结果分流写入：事实→vault、事件→SQLite
-     * 格式「事实 | 角色 | 内容」或「事件 | 标题 | 日期 | 描述」
+     * 将抽取结果分流写入：事实→vault(经消解)、事件→SQLite
+     * 事实先按实体分组，每个实体做一次 ADD/UPDATE/DELETE/NOOP 消解，避免同话题堆积/矛盾并存
      */
     private void applyExtraction(String userId, String extracted) {
+        // 按实体聚合本轮新事实
+        Map<String, List<String>> factsByEntity = new LinkedHashMap<>();
         for (String line : extracted.split("\\r?\\n")) {
             String trimmed = line.trim();
             if (trimmed.isEmpty() || NO_FACT_FLAG.equals(trimmed)) {
@@ -208,53 +210,159 @@ public class MemoryService {
             if (trimmed.startsWith("事件")) {
                 applyEvent(userId, trimmed);
             } else if (trimmed.startsWith("事实")) {
-                applyFact(userId, trimmed);
+                collectFact(factsByEntity, trimmed, 1, 2); // 事实 | 角色 | 内容
             } else {
-                // 兼容旧格式（角色 | 内容 | 动作），视为事实
-                applyFactLegacy(trimmed);
+                collectFact(factsByEntity, trimmed, 0, 1); // 旧格式 角色 | 内容 | 动作
             }
+        }
+        // 逐实体消解并写回
+        for (Map.Entry<String, List<String>> e : factsByEntity.entrySet()) {
+            reconcileEntity(e.getKey(), e.getValue());
         }
     }
 
-    /** 新格式「事实 | 角色 | 内容」 */
-    private void applyFact(String userId, String line) {
+    /** 从一行抽取结果取「角色/实体 + 事实内容」，归一实体后收集 */
+    private void collectFact(Map<String, List<String>> byEntity, String line, int roleIdx, int factIdx) {
         String[] parts = line.split("\\|");
-        if (parts.length < 3) return;
-        String role = parts[1].trim();
-        String fact = parts[2].trim();
+        if (parts.length <= Math.max(roleIdx, factIdx)) return;
+        String role = parts[roleIdx].trim();
+        String fact = parts[factIdx].trim();
         if (role.isEmpty() || fact.isEmpty()) return;
         String entity = resolveEntityFromRole(sanitizeEntity(role));
-        writeFactToFile(entity, fact);
+        if (entity.isEmpty()) return;
+        byEntity.computeIfAbsent(entity, k -> new ArrayList<>()).add(fact);
     }
 
-    /** 兼容旧格式「角色 | 内容 | 动作」 */
-    private void applyFactLegacy(String line) {
-        String[] parts = line.split("\\|");
-        if (parts.length < 3) return;
-        String entity = resolveEntityFromRole(sanitizeEntity(parts[0].trim()));
-        String fact = parts[1].trim();
-        if (entity.isEmpty() || fact.isEmpty()) return;
-        writeFactToFile(entity, fact);
-    }
-
-    /** 写一条事实到 vault */
-    private void writeFactToFile(String entity, String fact) {
+    /**
+     * mem0 式消解：把「实体现有事实 + 本轮新候选」交给 LLM，产出 ADD/UPDATE/DELETE 操作并应用。
+     * 新实体或消解失败时，降级为简单追加去重。
+     */
+    private void reconcileEntity(String entity, List<String> newFacts) {
         String fileName = "facts/" + entity + ".md";
+        VaultPage page;
+        List<String> existing;
+        try {
+            page = vaultStore.readPage(fileName);
+            existing = splitLines(page.getContent());
+        } catch (IOException notExist) {
+            // 新实体：无需消解，直接建页（候选内部已由抽取器去重）
+            writeEntityPage(entity, new ArrayList<>(newFacts));
+            return;
+        }
+
+        try {
+            String prompt = buildReconcilePrompt(entity, existing, newFacts);
+            String ops = llmClient.complete(prompt);
+            List<String> merged = applyReconcileOps(existing, ops);
+            writeEntityPage(entity, merged);
+        } catch (Exception ex) {
+            log.error("记忆消解失败，降级为追加去重: entity={}", entity, ex);
+            for (String f : newFacts) {
+                if (!existing.contains(f)) existing.add(f);
+            }
+            writeEntityPage(entity, existing);
+        }
+    }
+
+    /** 构建消解 prompt（行号引用，稳健） */
+    private String buildReconcilePrompt(String entity, List<String> existing, List<String> newFacts) {
+        StringBuilder ex = new StringBuilder();
+        for (int i = 0; i < existing.size(); i++) {
+            ex.append(i + 1).append(". ").append(existing.get(i)).append("\n");
+        }
+        String cand = newFacts.stream().map(f -> "- " + f).collect(Collectors.joining("\n"));
+        return """
+            你在维护「%s」的长期记忆。下面是现有记忆（带行号）和本轮新抽取的候选事实。
+            为每条候选决定如何并入，输出操作（每行一条），严格用这三种格式：
+              ADD | 内容              —— 全新信息，追加
+              UPDATE | 行号 | 新内容   —— 候选是某行的更新/更准确版本，替换该行（如名字变了、状态变了）
+              DELETE | 行号           —— 候选表明某行已过时/矛盾，删除该行
+            规则：
+            - 候选与现有语义重复（哪怕措辞不同）→ 不输出任何操作（丢弃）
+            - 只输出操作行，没有任何操作就只输出 NONE
+            - 行号必须是下面列出的真实行号
+
+            现有记忆：
+            %s
+            本轮候选：
+            %s
+            """.formatted(entity, ex.length() == 0 ? "（空）" : ex.toString(), cand.isEmpty() ? "（无）" : cand);
+    }
+
+    /** 应用消解操作到现有行，返回合并后的新行列表 */
+    private List<String> applyReconcileOps(List<String> existing, String ops) {
+        List<String> lines = new ArrayList<>(existing);
+        Set<Integer> toDelete = new HashSet<>();
+        Map<Integer, String> toUpdate = new HashMap<>();
+        List<String> toAdd = new ArrayList<>();
+
+        if (ops != null && !"NONE".equals(ops.trim())) {
+            for (String raw : ops.split("\\r?\\n")) {
+                String op = raw.trim();
+                if (op.isEmpty()) continue;
+                String[] p = op.split("\\|");
+                String kind = p[0].trim().toUpperCase();
+                try {
+                    if (kind.startsWith("ADD") && p.length >= 2) {
+                        String c = p[1].trim();
+                        if (!c.isEmpty()) toAdd.add(c);
+                    } else if (kind.startsWith("UPDATE") && p.length >= 3) {
+                        int idx = Integer.parseInt(p[1].trim()) - 1;
+                        String c = p[2].trim();
+                        if (idx >= 0 && idx < lines.size() && !c.isEmpty()) toUpdate.put(idx, c);
+                    } else if (kind.startsWith("DELETE") && p.length >= 2) {
+                        int idx = Integer.parseInt(p[1].trim()) - 1;
+                        if (idx >= 0 && idx < lines.size()) toDelete.add(idx);
+                    }
+                } catch (NumberFormatException ignore) {
+                    // 行号解析失败，跳过该操作
+                }
+            }
+        }
+
+        List<String> result = new ArrayList<>();
+        for (int i = 0; i < lines.size(); i++) {
+            if (toDelete.contains(i)) continue;
+            result.add(toUpdate.getOrDefault(i, lines.get(i)));
+        }
+        result.addAll(toAdd);
+        return result;
+    }
+
+    /** 把合并后的事实行写回实体页并更新索引 */
+    private void writeEntityPage(String entity, List<String> lines) {
+        String fileName = "facts/" + entity + ".md";
+        // 去重保序 + 去空
+        List<String> clean = new ArrayList<>();
+        for (String l : lines) {
+            String t = l == null ? "" : l.trim();
+            if (!t.isEmpty() && !clean.contains(t)) clean.add(t);
+        }
         try {
             VaultPage page;
             try {
                 page = vaultStore.readPage(fileName);
-                if (page.getContent() != null && page.getContent().contains(fact)) return;
-                page.setContent(page.getContent() + "\n" + fact);
-            } catch (IOException e) {
-                page = VaultPage.builder().title(entity).type("fact").content(fact).build();
+            } catch (IOException notExist) {
+                page = VaultPage.builder().title(entity).type("fact").content("").build();
             }
+            page.setContent(String.join("\n", clean));
             vaultStore.writePage(fileName, page);
             luceneIndex.addPage(fileName, page);
-            log.info("记忆写入: entity={}", entity);
+            log.info("记忆消解写入: entity={}, 行数={}", entity, clean.size());
         } catch (IOException e) {
             log.error("记忆写入 vault 失败: file={}", fileName, e);
         }
+    }
+
+    /** 正文按行拆分，去空行 */
+    private List<String> splitLines(String content) {
+        List<String> out = new ArrayList<>();
+        if (content == null) return out;
+        for (String l : content.split("\\r?\\n")) {
+            String t = l.trim();
+            if (!t.isEmpty()) out.add(t);
+        }
+        return out;
     }
 
     /** 事件 → SQLite */

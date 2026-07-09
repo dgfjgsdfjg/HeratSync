@@ -6,17 +6,29 @@ heartsync:
   netty:
     port: 8081
     ws-path: /ws/chat
-  # DeepSeek API 配置
+  # DeepSeek API 配置（OpenAI 兼容端点，配合 OpenAiStreamingChatModel）
+  # 注意：base-url 不要用 /anthropic——那是 Anthropic 原生格式，OpenAI 客户端会 404
   deepseek:
     api-key: ${DEEPSEEK_API_KEY:your-api-key}
     base-url: https://api.deepseek.com
-    model: deepseek-chat
+    model: deepseek-v4-flash
   # Vault 配置
   vault:
     path: vault
   # 认证配置（阶段 1 固定 token）
   auth:
     token: ${AUTH_TOKEN:heartsync-dev-token}
+  # 主动消息推送配置（拟人化：规则闸门 + LLM 决策）
+  # 下面是测试友好的小值，生产建议：poll 60000 / quiet 300 / cooldown 720 / jitter 180 / quiet-hours 开
+  push:
+    enabled: true                 # 总开关
+    poll-interval-ms: 10000       # 轮询间隔(毫秒)：多久检查一次
+    quiet-period-seconds: 20      # 静默期：刚聊完这么多秒内不主动推
+    cooldown-seconds: 30          # 冷却：两次主动推之间至少间隔
+    jitter-seconds: 10            # 冷却随机抖动上限(避免精确定时太机械)
+    quiet-hours-enabled: false    # 免打扰时段开关(测试先关)
+    quiet-hours-start: 1          # 免打扰起始小时(含)
+    quiet-hours-end: 7            # 免打扰结束小时(不含)
 
 # 静态资源（前端 web/ 目录）
 spring:

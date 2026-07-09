@@ -4,6 +4,7 @@ const API_BASE = `http://${location.hostname}:8080/api`;
 
 let ws = null;
 let currentAiBubble = null;
+let heartbeatTimer = null;
 
 // DOM 元素
 const messagesEl = document.getElementById('messages');
@@ -29,12 +30,20 @@ function connect() {
         inputEl.disabled = false;
         sendBtn.disabled = false;
         addSystemMessage('已连接');
+        // 定期发心跳，避免服务端 60 秒无读断连（主动推送需要长时间挂着连接）
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = setInterval(() => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'ping' }));
+            }
+        }, 30000);
     };
 
     ws.onclose = () => {
         setStatus(false);
         inputEl.disabled = true;
         sendBtn.disabled = true;
+        clearInterval(heartbeatTimer);
         addSystemMessage('连接断开，5 秒后重连...');
         setTimeout(connect, 5000);
     };

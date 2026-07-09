@@ -66,7 +66,7 @@ public class CompanionService {
         ensureHistoryLoaded(userId);
 
         // 1. 记忆召回
-        String memories = memoryService.recall(message);
+        String memories = memoryService.recall(message, userId);
 
         // 2. 装载人设
         String systemPrompt = personaService.loadSystemPrompt();
@@ -108,8 +108,8 @@ public class CompanionService {
         personaService.updateStateField("上次互动", LocalDateTime.now().toString());
         lastInteractionTime.put(userId, LocalDateTime.now());
 
-        // 4. 异步记忆写回（抽取事实）
-        memoryService.remember(userMessage, aiResponse);
+        // 4. 异步记忆写回（抽取事实 + 事件）
+        memoryService.remember(userId, userMessage, aiResponse);
 
         log.info("对话完成: userId={}, historySize={}", userId, history.size());
     }
@@ -162,7 +162,7 @@ public class CompanionService {
         String historyText = renderHistory(history);
         // 用最近一条用户消息做记忆召回
         String lastUserMsg = lastUserMessage(history);
-        String memories = memoryService.recall(lastUserMsg != null ? lastUserMsg : historyText);
+        String memories = memoryService.recall(lastUserMsg != null ? lastUserMsg : historyText, userId);
         // 距上次互动多久
         LocalDateTime last = lastInteractionTime.get(userId);
         long minutesSince = last == null ? -1 : ChronoUnit.MINUTES.between(last, LocalDateTime.now());

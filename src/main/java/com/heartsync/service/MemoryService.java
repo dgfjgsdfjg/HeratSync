@@ -35,13 +35,16 @@ public class MemoryService {
 
     private final VaultStore vaultStore;
     private final LuceneIndex luceneIndex;
-    /** 用于 remember 阶段的事实抽取，可能为 null（测试时） */
+    /** 用于 remember 阶段的事实/事件抽取，可能为 null（测试时） */
     private final LlmClient llmClient;
+    /** 事件持久化存储；可为 null（测试时） */
+    private final EventStore eventStore;
 
-    public MemoryService(VaultStore vaultStore, LuceneIndex luceneIndex, LlmClient llmClient) {
+    public MemoryService(VaultStore vaultStore, LuceneIndex luceneIndex, LlmClient llmClient, EventStore eventStore) {
         this.vaultStore = vaultStore;
         this.luceneIndex = luceneIndex;
         this.llmClient = llmClient;
+        this.eventStore = eventStore;
     }
 
     /**
@@ -50,71 +53,76 @@ public class MemoryService {
      * @return 拼装好的记忆片段文本，可直接拼入 prompt；无结果时返回空串
      */
     public String recall(String query) {
-        if (query == null || query.isBlank()) {
-            return "";
-        }
-
-        try {
-            // 1. BM25 全文检索
-            List<VaultPage> bm25Results = luceneIndex.search(query, RECALL_TOP_N);
-            if (bm25Results == null || bm25Results.isEmpty()) {
-                return "";
-            }
-
-            // 2. 按标题去重（BM25 结果内部去重）
-            Set<String> seenTitles = new HashSet<>();
-            List<VaultPage> recalled = new ArrayList<>();
-            for (VaultPage page : bm25Results) {
-                if (page.getTitle() != null && seenTitles.add(page.getTitle())) {
-                    recalled.add(page);
-                }
-            }
-
-            // 3. wikilink 一跳扩展
-            // LuceneIndex 返回的 VaultPage 不含 links 字段，需从 content 重新提取
-            for (VaultPage page : new ArrayList<>(recalled)) {
-                List<String> links = VaultStore.extractWikilinks(page.getContent());
-                for (String link : links) {
-                    VaultPage linked = vaultStore.findByTitle(link);
-                    if (linked != null && linked.getTitle() != null
-                        && seenTitles.add(linked.getTitle())) {
-                        recalled.add(linked);
-                    }
-                }
-            }
-
-            // 4. 拼装为文本片段（仅正文，不含标题前缀，避免标题词干扰去重断言）
-            return recalled.stream()
-                .map(p -> p.getContent() != null ? p.getContent() : "")
-                .collect(Collectors.joining("\n"));
-
-        } catch (IOException e) {
-            log.error("记忆召回失败, query={}", query, e);
-            return ""; // 降级：无记忆继续对话
-        }
+        return recall(query, null);
     }
 
     /**
-     * 记忆写回：从本轮对话中抽取事实，更新 vault
-     * 异步执行，失败不影响对话主流程
-     * @param userMessage 用户消息
-     * @param aiResponse  AI 回复
+     * 记忆召回（带事件）：facts 走 BM25+图谱、events 走 SQLite 按时序，
+     * 合并返回，无结果时返回空串
      */
-    public void remember(String userMessage, String aiResponse) {
+    public String recall(String query, String userId) {
+        StringBuilder sb = new StringBuilder();
+
+        // === 事实（vault BM25+图谱）===
+        if (query != null && !query.isBlank()) {
+            try {
+                List<VaultPage> bm25Results = luceneIndex.search(query, RECALL_TOP_N);
+                if (bm25Results != null && !bm25Results.isEmpty()) {
+                    Set<String> seenTitles = new HashSet<>();
+                    List<VaultPage> recalled = new ArrayList<>();
+                    for (VaultPage page : bm25Results) {
+                        if (page.getTitle() != null && seenTitles.add(page.getTitle())) {
+                            recalled.add(page);
+                        }
+                    }
+                    for (VaultPage page : new ArrayList<>(recalled)) {
+                        for (String link : VaultStore.extractWikilinks(page.getContent())) {
+                            VaultPage linked = vaultStore.findByTitle(link);
+                            if (linked != null && linked.getTitle() != null && seenTitles.add(linked.getTitle())) {
+                                recalled.add(linked);
+                            }
+                        }
+                    }
+                    sb.append(recalled.stream()
+                        .map(p -> p.getContent() != null ? p.getContent() : "")
+                        .collect(Collectors.joining("\n")));
+                }
+            } catch (IOException e) {
+                log.error("记忆召回失败, query={}", query, e);
+            }
+        }
+
+        // === 事件（SQLite）===
+        if (userId != null && eventStore != null) {
+            String events = eventStore.renderForRecall(userId);
+            if (!events.isEmpty()) {
+                if (sb.length() > 0) {
+                sb.append("\n\n## 近期事件\n");
+            }
+                sb.append(events);
+            }
+        }
+
+        return sb.toString();
+    }
+
+    /**
+     * 记忆写回：从本轮对话抽取【事实】(→vault) 和【事件】(→SQLite)
+     * 异步执行，失败不影响对话主流程
+     */
+    public void remember(String userId, String userMessage, String aiResponse) {
         if (llmClient == null) {
             log.warn("LlmClient 未初始化，跳过记忆写回");
             return;
         }
-        // 异步执行，失败不影响主流程
         CompletableFuture.runAsync(() -> {
             try {
-                // 先读出已知事实，喂给抽取器，避免把同一偏好反复记成多条（如「喜欢红茶」被重复抽取）
                 String knownFacts = renderKnownFacts();
-                String factPrompt = buildFactExtractionPrompt(userMessage, aiResponse, knownFacts);
-                String extracted = extractFactSync(factPrompt);
+                String prompt = buildExtractionPrompt(userMessage, aiResponse, knownFacts);
+                String extracted = extractFactSync(prompt);
                 if (extracted != null && !extracted.isBlank()
                     && !NO_FACT_FLAG.equals(extracted.trim())) {
-                    applyFactToVault(extracted);
+                    applyExtraction(userId, extracted);
                 }
             } catch (Exception e) {
                 log.error("记忆写回失败，不影响主流程, userMessage={}", userMessage, e);
@@ -139,35 +147,39 @@ public class MemoryService {
     }
 
     /**
-     * 构建事实抽取 prompt
-     * @param knownFacts 已知事实文本，让 LLM 只抽取尚未记录的新信息，避免同义重复
+     * 构建抽取 prompt：同时抽【事实】和【事件】
+     * @param knownFacts 已知事实文本，避免重复
      */
-    private String buildFactExtractionPrompt(String userMessage, String aiResponse, String knownFacts) {
+    private String buildExtractionPrompt(String userMessage, String aiResponse, String knownFacts) {
+        String today = java.time.LocalDate.now().toString();
         return """
-            你是一个记忆抽取器。从下面对话中抽取值得长期记住的【新】事实（用户的个人信息、喜好、习惯、关系、经历等）。
+            你是记忆抽取器。从下面对话中抽取值得记住的【新】信息，分两类：
 
-            规则：
-            1. 每条事实单独一行，格式严格为：角色 | 事实内容 | 动作(create/update)
-            2. 只抽取「已知记忆」里【没有】的新信息。语义重复的（哪怕措辞不同，如「爱喝红茶」vs「喜欢红茶」）绝对不要再输出。
-            3. 「角色」按事实归属判断，只用下面三类，不要自造名字：
-               - 自己：关于【说话的用户本人】的事（不管 TA 自称我/主人/名字，都算「自己」）。
-               - 恋人：关于【AI / 用户的恋人 / 你扮演的角色】的事。
-               - 具体本名：真正的第三方对象（宠物、别的人等），用其本名，并复用「已知记忆」里出现过的名字。
-            4. 只输出事实行，不要任何解释、编号、前后缀。
-            5. 如果本轮没有任何值得记住的新信息，只输出 NONE。
+            === 事实（永久属性，无时间点：喜好、身份、关系等）===
+            格式：事实 | 角色 | 内容
+            - 角色只三类：自己（说话的用户本人，不管自称什么）、恋人（AI/用户的恋人/你扮演的角色）、第三方本名（宠物等）
+            - 只抽「已知记忆」里没有的新事实，语义重复的（如「爱喝红茶」vs「喜欢红茶」）不要再输出
+
+            === 事件（有时间点的事：约会、爬山、纪念日、计划等）===
+            格式：事件 | 标题 | 日期(YYYY-MM-DD) | 描述
+            - 今天是 %s。把「明天/下周/后天」等相对时间换算成具体日期。
+            - 时间完全无法判断时，用今天的日期。
+            - 标题简短（如「爬岳麓山」）
+
+            通用规则：每条一行，只输出数据行，不要解释/编号/前后缀。没有任何新信息就只输出 NONE。
 
             示例输出：
-            自己 | 在杭州做后端开发 | create
-            恋人 | 和用户逛漫展时会害羞 | create
-            橘子 | 用户养的橘猫 | create
+            事实 | 自己 | 在杭州做后端开发
+            事件 | 爬岳麓山 | %s | 用户计划的户外活动
+            事件 | 第一次一起逛漫展 | 2026-06-01 | 重要回忆
 
-            已知记忆（这些都记过了，不要重复）：
+            已知记忆（这些事实都记过了，不要重复）：
             %s
 
             本轮对话：
             用户: %s
             恋人: %s
-            """.formatted(knownFacts == null || knownFacts.isBlank() ? "（暂无）" : knownFacts, userMessage, aiResponse);
+            """.formatted(today, today, knownFacts == null || knownFacts.isBlank() ? "（暂无）" : knownFacts, userMessage, aiResponse);
     }
 
     /**
@@ -179,60 +191,77 @@ public class MemoryService {
     }
 
     /**
-     * 将抽取结果写入 vault（支持多行，每行一条事实）
+     * 将抽取结果分流写入：事实→vault、事件→SQLite
+     * 格式「事实 | 角色 | 内容」或「事件 | 标题 | 日期 | 描述」
      */
-    private void applyFactToVault(String extracted) {
-        // 逐行处理，每行一条 "实体名 | 事实内容 | 动作"
+    private void applyExtraction(String userId, String extracted) {
         for (String line : extracted.split("\\r?\\n")) {
             String trimmed = line.trim();
             if (trimmed.isEmpty() || NO_FACT_FLAG.equals(trimmed)) {
                 continue;
             }
-            applyOneFact(trimmed);
+            if (trimmed.startsWith("事件")) {
+                applyEvent(userId, trimmed);
+            } else if (trimmed.startsWith("事实")) {
+                applyFact(userId, trimmed);
+            } else {
+                // 兼容旧格式（角色 | 内容 | 动作），视为事实
+                applyFactLegacy(trimmed);
+            }
         }
     }
 
-    /**
-     * 写入单条事实
-     */
-    private void applyOneFact(String line) {
+    /** 新格式「事实 | 角色 | 内容」 */
+    private void applyFact(String userId, String line) {
         String[] parts = line.split("\\|");
-        if (parts.length < 3) {
-            log.warn("事实格式不合法，跳过: {}", line);
-            return;
-        }
+        if (parts.length < 3) return;
+        String role = parts[1].trim();
+        String fact = parts[2].trim();
+        if (role.isEmpty() || fact.isEmpty()) return;
+        String entity = resolveEntityFromRole(sanitizeEntity(role));
+        writeFactToFile(entity, fact);
+    }
 
+    /** 兼容旧格式「角色 | 内容 | 动作」 */
+    private void applyFactLegacy(String line) {
+        String[] parts = line.split("\\|");
+        if (parts.length < 3) return;
         String entity = resolveEntityFromRole(sanitizeEntity(parts[0].trim()));
         String fact = parts[1].trim();
-        String action = parts[2].trim();
-        if (entity.isEmpty() || fact.isEmpty()) {
-            return;
-        }
-        String fileName = "facts/" + entity + ".md";
+        if (entity.isEmpty() || fact.isEmpty()) return;
+        writeFactToFile(entity, fact);
+    }
 
+    /** 写一条事实到 vault */
+    private void writeFactToFile(String entity, String fact) {
+        String fileName = "facts/" + entity + ".md";
         try {
             VaultPage page;
             try {
-                // 文件已存在 -> update: 追加事实（去重：已含则跳过）
                 page = vaultStore.readPage(fileName);
-                if (page.getContent() != null && page.getContent().contains(fact)) {
-                    return;
-                }
+                if (page.getContent() != null && page.getContent().contains(fact)) return;
                 page.setContent(page.getContent() + "\n" + fact);
             } catch (IOException e) {
-                // 文件不存在 -> create: 新建事实页
-                page = VaultPage.builder()
-                    .title(entity)
-                    .type("fact")
-                    .content(fact)
-                    .build();
+                page = VaultPage.builder().title(entity).type("fact").content(fact).build();
             }
             vaultStore.writePage(fileName, page);
             luceneIndex.addPage(fileName, page);
-            log.info("记忆写入: entity={}, action={}", entity, action);
+            log.info("记忆写入: entity={}", entity);
         } catch (IOException e) {
             log.error("记忆写入 vault 失败: file={}", fileName, e);
         }
+    }
+
+    /** 事件 → SQLite */
+    private void applyEvent(String userId, String line) {
+        if (eventStore == null) return;
+        String[] parts = line.split("\\|");
+        if (parts.length < 3) return;
+        String title = parts[1].trim();
+        String date = parts[2].trim();
+        String desc = parts.length > 3 ? parts[3].trim() : "";
+        if (title.isEmpty() || date.isEmpty()) return;
+        eventStore.append(userId, title, date, desc);
     }
 
     /**

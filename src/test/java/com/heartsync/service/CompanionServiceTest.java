@@ -20,7 +20,7 @@ class CompanionServiceTest {
     void setUp() {
         // 使用 mock/假实现
         // ponytail: 不引入 Mockito，手写匿名类
-        memoryService = new MemoryService(null, null, null) {
+        memoryService = new MemoryService(null, null, null, null) {
             @Override
             public String recall(String query) {
                 return "用户养了猫叫橘子";

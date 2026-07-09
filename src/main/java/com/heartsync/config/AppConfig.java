@@ -1,5 +1,7 @@
 package com.heartsync.config;
 
+import com.heartsync.netty.NettyWsServer;
+import com.heartsync.netty.WsSessionManager;
 import com.heartsync.service.LlmClient;
 import com.heartsync.vault.LuceneIndex;
 import com.heartsync.vault.VaultStore;
@@ -40,5 +42,10 @@ public class AppConfig {
     @Bean
     public LlmClient llmClient() {
         return new LlmClient(deepseekApiKey, deepseekBaseUrl, deepseekModel);
+    }
+
+    @Bean
+    public WsSessionManager wsSessionManager(NettyWsServer nettyWsServer) {
+        return nettyWsServer.getSessionManager();
     }
 }

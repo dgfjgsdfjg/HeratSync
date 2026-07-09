@@ -25,6 +25,12 @@ public class MemoryService {
     /** 事实抽取返回的无事实标记 */
     private static final String NO_FACT_FLAG = "NONE";
 
+    /** 用户的规范实体名（所有第一人称/主人称谓归一到此） */
+    private static final String CANONICAL_USER = "用户";
+
+    /** 第一人称/称谓 → 规范用户实体名，防止同一个人被拆成多页 */
+    private static final Set<String> USER_ALIASES = Set.of("我", "主人", "自己", "咱", "俺", "本人");
+
     private final VaultStore vaultStore;
     private final LuceneIndex luceneIndex;
     /** 用于 remember 阶段的事实抽取，可能为 null（测试时） */
@@ -141,7 +147,10 @@ public class MemoryService {
             规则：
             1. 每条事实单独一行，格式严格为：实体名 | 事实内容 | 动作(create/update)
             2. 只抽取「已知记忆」里【没有】的新信息。语义重复的（哪怕措辞不同，如「爱喝红茶」vs「喜欢红茶」）绝对不要再输出。
-            3. 实体名是这条事实归属的对象（人名/宠物名/物品名等），会作为记忆文件名；同一对象请复用已有实体名，不要新造。
+            3. 实体名归一，不要给同一个对象起多个名字：
+               - 说话的人（第一人称「我」、主人、用户本人）→ 一律用「用户」，即使对话里提到 TA 的真名也归到「用户」。
+               - AI 自己 / 用户的恋人 / 用户让你扮演的角色 → 一律用「恋人」。
+               - 其他具体对象（宠物、别的人名等）→ 用其本名，并复用「已知记忆」里出现过的实体名，绝不新造。
             4. 只输出事实行，不要任何解释、编号、前后缀。
             5. 如果本轮没有任何值得记住的新信息，只输出 NONE。
 
@@ -190,7 +199,7 @@ public class MemoryService {
             return;
         }
 
-        String entity = sanitizeEntity(parts[0].trim());
+        String entity = canonicalizeEntity(sanitizeEntity(parts[0].trim()));
         String fact = parts[1].trim();
         String action = parts[2].trim();
         if (entity.isEmpty() || fact.isEmpty()) {
@@ -228,5 +237,12 @@ public class MemoryService {
      */
     private String sanitizeEntity(String entity) {
         return entity.replaceAll("[\\\\/:*?\"<>|]", "").trim();
+    }
+
+    /**
+     * 实体名归一：第一人称/主人称谓统一到「用户」，防止同一个人被拆成 我/主人/自己 等多页
+     */
+    private String canonicalizeEntity(String entity) {
+        return USER_ALIASES.contains(entity) ? CANONICAL_USER : entity;
     }
 }

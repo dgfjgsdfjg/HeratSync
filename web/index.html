@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HeratSync - AI 陪伴</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- 记忆侧栏 -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <h3>记忆</h3>
+                <button id="toggleSidebar" title="收起侧栏">◀</button>
+            </div>
+            <div class="sidebar-list" id="memoryList">
+                <div class="loading">加载中...</div>
+            </div>
+        </aside>
+
+        <!-- 聊天区域 -->
+        <main class="chat-area">
+            <header class="chat-header">
+                <h1>HeratSync</h1>
+                <span class="status" id="statusIndicator">● 离线</span>
+            </header>
+            <div class="messages" id="messages">
+                <div class="message system">
+                    <div class="bubble">连接中...</div>
+                </div>
+            </div>
+            <div class="input-area">
+                <input type="text" id="input" placeholder="说点什么..." autofocus disabled>
+                <button id="sendBtn" disabled>发送</button>
+            </div>
+        </main>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>

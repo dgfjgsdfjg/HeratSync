@@ -1,2 +1,5 @@
 .idea/
 target/
+.run/
+.playwright-mcp/
+vault/heartsync.db

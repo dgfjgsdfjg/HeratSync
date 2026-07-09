@@ -1,0 +1,25 @@
+server:
+  port: 8080
+
+# Netty WebSocket 配置
+heartsync:
+  netty:
+    port: 8081
+    ws-path: /ws/chat
+  # DeepSeek API 配置
+  deepseek:
+    api-key: ${DEEPSEEK_API_KEY:your-api-key}
+    base-url: https://api.deepseek.com
+    model: deepseek-chat
+  # Vault 配置
+  vault:
+    path: vault
+  # 认证配置（阶段 1 固定 token）
+  auth:
+    token: ${AUTH_TOKEN:heartsync-dev-token}
+
+# 静态资源（前端 web/ 目录）
+spring:
+  web:
+    resources:
+      static-locations: file:web/

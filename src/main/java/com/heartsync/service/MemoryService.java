@@ -25,11 +25,13 @@ public class MemoryService {
     /** 事实抽取返回的无事实标记 */
     private static final String NO_FACT_FLAG = "NONE";
 
-    /** 用户的规范实体名（所有第一人称/主人称谓归一到此） */
-    private static final String CANONICAL_USER = "用户";
+    /** 两个固定角色对应的规范记忆页名 */
+    private static final String CANONICAL_USER = "用户";       // 角色「自己」→ 此页
+    private static final String CANONICAL_COMPANION = "恋人";  // 角色「恋人」→ 此页
 
-    /** 第一人称/称谓 → 规范用户实体名，防止同一个人被拆成多页 */
-    private static final Set<String> USER_ALIASES = Set.of("我", "主人", "自己", "咱", "俺", "本人");
+    /** 角色标签容错：LLM 可能输出的等价说法，归一到规范页（仅两个角色，非用户别名穷举） */
+    private static final Set<String> SELF_LABELS = Set.of("自己", "我", "用户", "用户本人");
+    private static final Set<String> COMPANION_LABELS = Set.of("恋人", "对方", "ai", "AI");
 
     private final VaultStore vaultStore;
     private final LuceneIndex luceneIndex;
@@ -145,21 +147,22 @@ public class MemoryService {
             你是一个记忆抽取器。从下面对话中抽取值得长期记住的【新】事实（用户的个人信息、喜好、习惯、关系、经历等）。
 
             规则：
-            1. 每条事实单独一行，格式严格为：实体名 | 事实内容 | 动作(create/update)
+            1. 每条事实单独一行，格式严格为：角色 | 事实内容 | 动作(create/update)
             2. 只抽取「已知记忆」里【没有】的新信息。语义重复的（哪怕措辞不同，如「爱喝红茶」vs「喜欢红茶」）绝对不要再输出。
-            3. 实体名归一，不要给同一个对象起多个名字：
-               - 说话的人（第一人称「我」、主人、用户本人）→ 一律用「用户」，即使对话里提到 TA 的真名也归到「用户」。
-               - AI 自己 / 用户的恋人 / 用户让你扮演的角色 → 一律用「恋人」。
-               - 其他具体对象（宠物、别的人名等）→ 用其本名，并复用「已知记忆」里出现过的实体名，绝不新造。
+            3. 「角色」按事实归属判断，只用下面三类，不要自造名字：
+               - 自己：关于【说话的用户本人】的事（不管 TA 自称我/主人/名字，都算「自己」）。
+               - 恋人：关于【AI / 用户的恋人 / 你扮演的角色】的事。
+               - 具体本名：真正的第三方对象（宠物、别的人等），用其本名，并复用「已知记忆」里出现过的名字。
             4. 只输出事实行，不要任何解释、编号、前后缀。
             5. 如果本轮没有任何值得记住的新信息，只输出 NONE。
 
+            示例输出：
+            自己 | 在杭州做后端开发 | create
+            恋人 | 和用户逛漫展时会害羞 | create
+            橘子 | 用户养的橘猫 | create
+
             已知记忆（这些都记过了，不要重复）：
             %s
-
-            示例输出：
-            小明 | 在杭州做后端开发 | create
-            橘子 | 小明养的橘猫 | create
 
             本轮对话：
             用户: %s
@@ -199,7 +202,7 @@ public class MemoryService {
             return;
         }
 
-        String entity = canonicalizeEntity(sanitizeEntity(parts[0].trim()));
+        String entity = resolveEntityFromRole(sanitizeEntity(parts[0].trim()));
         String fact = parts[1].trim();
         String action = parts[2].trim();
         if (entity.isEmpty() || fact.isEmpty()) {
@@ -240,9 +243,17 @@ public class MemoryService {
     }
 
     /**
-     * 实体名归一：第一人称/主人称谓统一到「用户」，防止同一个人被拆成 我/主人/自己 等多页
+     * 把 LLM 输出的「角色」标签解析为规范记忆页名。
+     * 自己→用户页、恋人→恋人页（含少量容错说法），其余按第三方本名。
+     * 与「用户自称什么」无关——角色由 LLM 按事实归属判断，代码只做固定映射，天然支持多用户/多语言。
      */
-    private String canonicalizeEntity(String entity) {
-        return USER_ALIASES.contains(entity) ? CANONICAL_USER : entity;
+    private String resolveEntityFromRole(String roleLabel) {
+        if (SELF_LABELS.contains(roleLabel)) {
+            return CANONICAL_USER;
+        }
+        if (COMPANION_LABELS.contains(roleLabel)) {
+            return CANONICAL_COMPANION;
+        }
+        return roleLabel; // 第三方对象，用本名
     }
 }

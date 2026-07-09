@@ -3,50 +3,64 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HeratSync - AI 陪伴</title>
+    <title>HeartSync · 小蕾</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700&family=Noto+Serif+SC:wght@500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/vis-network@9.1.9/styles/vis-network.min.css">
+    <script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <div class="container">
-        <!-- 记忆侧栏 -->
-        <aside class="sidebar" id="sidebar">
-            <div class="sidebar-header">
-                <h3>记忆</h3>
-                <button id="toggleSidebar" title="收起侧栏">◀</button>
-            </div>
-            <div class="sidebar-list" id="memoryList">
-                <div class="loading">加载中...</div>
-            </div>
-        </aside>
+    <!-- 慢速环境光，opacity 极低，不抢戏 -->
+    <div class="ambient" aria-hidden="true"></div>
 
-        <!-- 聊天区域 -->
-        <main class="chat-area">
-            <header class="chat-header">
-                <h1>HeratSync</h1>
-                <span class="status" id="statusIndicator">● 离线</span>
-            </header>
-            <div class="messages" id="messages">
-                <div class="message system">
-                    <div class="bubble">连接中...</div>
+    <div class="app">
+        <header class="topbar">
+            <div class="brand">
+                <span class="avatar">🌷</span>
+                <div class="brand-text">
+                    <h1>小蕾</h1>
+                    <span class="status offline" id="statusIndicator"><i class="dot"></i><span id="statusText">连接中…</span></span>
                 </div>
             </div>
-            <div class="input-area">
-                <input type="text" id="input" placeholder="说点什么..." autofocus disabled>
-                <button id="sendBtn" disabled>发送</button>
+            <button class="ball-btn" id="openBall">
+                <span class="ball-ico">◍</span> 记忆球
+            </button>
+        </header>
+
+        <main class="chat" id="messages"></main>
+
+        <footer class="composer">
+            <div class="composer-inner">
+                <input type="text" id="input" placeholder="想和小蕾说点什么…" autocomplete="off" disabled>
+                <button id="sendBtn" disabled aria-label="发送">
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+                </button>
             </div>
-        </main>
+        </footer>
     </div>
 
-    <!-- 记忆详情弹窗 -->
-    <div class="modal-overlay" id="modalOverlay">
-        <div class="modal">
-            <div class="modal-header">
-                <h3 id="modalTitle"></h3>
-                <button class="modal-close" id="modalClose">✕</button>
+    <!-- 记忆球 -->
+    <div class="ball-overlay" id="ballOverlay" aria-hidden="true">
+        <div class="ball-panel">
+            <div class="ball-header">
+                <div>
+                    <h2>我们的记忆</h2>
+                    <p class="ball-sub">每一颗，都是关于你的</p>
+                </div>
+                <button class="ball-close" id="closeBall" aria-label="关闭">✕</button>
             </div>
-            <div class="modal-body" id="modalBody"></div>
-            <div class="modal-footer">
-                <button class="btn-delete" id="modalDelete">删除这条记忆</button>
+            <div class="ball-stage">
+                <div id="ballGraph"></div>
+                <div class="ball-legend">
+                    <span><i style="background:#8fb8e8"></i>你</span>
+                    <span><i style="background:#eaa0b8"></i>小蕾</span>
+                    <span><i style="background:#9dd6b6"></i>其他</span>
+                    <span><i style="background:#f2c795"></i>事件</span>
+                    <span><i style="background:#d9ccee"></i>记忆点</span>
+                </div>
+                <div class="ball-tip" id="ballTip">拖动查看 · 滚轮缩放 · 点一颗看详情</div>
             </div>
         </div>
     </div>

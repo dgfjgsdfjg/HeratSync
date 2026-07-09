@@ -25,6 +25,10 @@ class CompanionServiceTest {
             public String recall(String query) {
                 return "用户养了猫叫橘子";
             }
+            @Override
+            public String recall(String query, String userId) {
+                return "用户养了猫叫橘子";
+            }
         };
         personaService = new PersonaService(null) {
             @Override

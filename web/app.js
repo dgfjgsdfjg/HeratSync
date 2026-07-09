@@ -144,16 +144,68 @@ async function loadMemories() {
     try {
         const res = await fetch(`${API_BASE}/memories`);
         const memories = await res.json();
-        memoryListEl.innerHTML = memories.map(m =>
-            `<div class="memory-item">
-                <span class="type">${m.type}</span>
-                <span>${m.title}</span>
-            </div>`
-        ).join('');
+        memoryListEl.innerHTML = memories.map(m => {
+            const safeType = escapeHtml(m.type || '');
+            const safeTitle = escapeHtml(m.title || '');
+            const safePath = escapeHtml(m.path || '');
+            return `<div class="memory-item" data-path="${safePath}">
+                <span class="type">${safeType}</span>
+                <span>${safeTitle}</span>
+            </div>`;
+        }).join('');
     } catch (e) {
         memoryListEl.innerHTML = '<div class="loading">加载失败</div>';
     }
 }
+
+// 记忆侧栏点击事件（事件委托）
+memoryListEl.addEventListener('click', async (e) => {
+    const item = e.target.closest('.memory-item');
+    if (!item) return;
+    const path = item.dataset.path;
+    if (!path) return;
+    await openMemory(path);
+});
+
+// 打开记忆详情弹窗
+async function openMemory(path) {
+    try {
+        const res = await fetch(`${API_BASE}/memories/${encodeURIComponent(path)}`);
+        if (!res.ok) throw new Error('Not found');
+        const page = await res.json();
+        document.getElementById('modalTitle').textContent = page.title || path;
+        document.getElementById('modalBody').textContent = page.content || '(空)';
+        document.getElementById('modalOverlay').dataset.path = path;
+        document.getElementById('modalOverlay').classList.add('active');
+    } catch (e) {
+        alert('加载记忆失败: ' + path);
+    }
+}
+
+// 关闭弹窗
+document.getElementById('modalClose').addEventListener('click', () => {
+    document.getElementById('modalOverlay').classList.remove('active');
+});
+document.getElementById('modalOverlay').addEventListener('click', (e) => {
+    if (e.target === document.getElementById('modalOverlay')) {
+        document.getElementById('modalOverlay').classList.remove('active');
+    }
+});
+
+// 删除记忆
+document.getElementById('modalDelete').addEventListener('click', async () => {
+    const path = document.getElementById('modalOverlay').dataset.path;
+    if (!path) return;
+    if (!confirm('确定删除这条记忆？')) return;
+    try {
+        const res = await fetch(`${API_BASE}/memories/${encodeURIComponent(path)}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error('Delete failed');
+        document.getElementById('modalOverlay').classList.remove('active');
+        await loadMemories(); // 刷新列表
+    } catch (e) {
+        alert('删除失败: ' + path);
+    }
+});
 
 // 事件绑定
 sendBtn.addEventListener('click', sendMessage);

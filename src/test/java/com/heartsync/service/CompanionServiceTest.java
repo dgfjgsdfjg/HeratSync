@@ -20,9 +20,13 @@ class CompanionServiceTest {
     void setUp() {
         // 使用 mock/假实现
         // ponytail: 不引入 Mockito，手写匿名类
-        memoryService = new MemoryService(null, null, null) {
+        memoryService = new MemoryService(null, null, null, null) {
             @Override
             public String recall(String query) {
+                return "用户养了猫叫橘子";
+            }
+            @Override
+            public String recall(String query, String userId) {
                 return "用户养了猫叫橘子";
             }
         };
@@ -44,7 +48,7 @@ class CompanionServiceTest {
                 return Flux.just("抱", "抱", "你");
             }
         };
-        companionService = new CompanionService(memoryService, personaService, llmClient);
+        companionService = new CompanionService(memoryService, personaService, llmClient, null, 10);
     }
 
     @Test

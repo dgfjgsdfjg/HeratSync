@@ -6,20 +6,48 @@ heartsync:
   netty:
     port: 8081
     ws-path: /ws/chat
-  # DeepSeek API 配置
+  # DeepSeek API 配置（OpenAI 兼容端点，配合 OpenAiStreamingChatModel）
+  # 注意：base-url 不要用 /anthropic——那是 Anthropic 原生格式，OpenAI 客户端会 404
   deepseek:
     api-key: ${DEEPSEEK_API_KEY:your-api-key}
     base-url: https://api.deepseek.com
-    model: deepseek-chat
+    model: deepseek-v4-flash
   # Vault 配置
   vault:
     path: vault
   # 认证配置（阶段 1 固定 token）
   auth:
     token: ${AUTH_TOKEN:heartsync-dev-token}
+  # 对话历史持久化（MyBatis-Plus + SQLite）
+  conversation:
+    load-rounds: 10               # 启动/会话恢复时从库里载入最近多少轮到上下文窗口
+  # 主动消息推送配置（拟人化：规则闸门 + LLM 决策）
+  # 当前为「克制」档：不刷屏、避开深夜。想更活跃就把 quiet-period / cooldown 调小
+  push:
+    enabled: true                 # 总开关
+    poll-interval-ms: 30000       # 轮询间隔(毫秒)：30秒检查一次
+    quiet-period-seconds: 120     # 静默期：刚聊完 2 分钟内不主动推
+    cooldown-seconds: 300         # 冷却：两次主动推至少间隔 5 分钟
+    jitter-seconds: 120           # 冷却随机抖动上限(0~2分钟，避免机械定时)
+    quiet-hours-enabled: true     # 免打扰时段开启
+    quiet-hours-start: 23         # 免打扰起始小时(含)：23:00
+    quiet-hours-end: 8            # 免打扰结束小时(不含)：08:00
 
 # 静态资源（前端 web/ 目录）
 spring:
   web:
     resources:
       static-locations: file:web/
+  # SQLite 数据源（对话持久化）
+  datasource:
+    url: jdbc:sqlite:vault/heartsync.db
+    driver-class-name: org.sqlite.JDBC
+  # 启动执行 schema.sql 建表（IF NOT EXISTS，幂等）
+  sql:
+    init:
+      mode: always
+
+# MyBatis-Plus
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true

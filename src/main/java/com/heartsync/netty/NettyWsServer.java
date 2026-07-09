@@ -73,15 +73,18 @@ public class NettyWsServer {
                     // 认证（WebSocket 握手前）
                     pipeline.addLast(new AuthHandler(authToken, sessionManager));
                     // WebSocket 协议升级
-                    // checkStartsWith=true: URI 带 query 参数(?token=xxx)时用前缀匹配，
-                    // 否则默认精确匹配会因 "/ws/chat?token=xxx" != "/ws/chat" 而不握手
+                    // checkStartsWith=true: URI 带 query 参数(?token=xxx)时用前缀匹配
+                    // dropPongFrames=false: 让浏览器回的 PONG 帧继续向下传递，
+                    //   否则被上游吞掉，IdleStateHandler 收不到读事件、READER_IDLE 无法重置
                     WebSocketServerProtocolConfig wsConfig = WebSocketServerProtocolConfig.newBuilder()
                         .websocketPath(wsPath)
                         .checkStartsWith(true)
+                        .dropPongFrames(false)
                         .build();
                     pipeline.addLast(new WebSocketServerProtocolHandler(wsConfig));
-                    // 空闲检测（60 秒无读 -> 断开）
-                    pipeline.addLast(new IdleStateHandler(60, 0, 0, TimeUnit.SECONDS));
+                    // 空闲检测：READER_IDLE 120s(死连接硬关) + ALL_IDLE 40s(触发服务端 PING 探活)
+                    // 服务端主动 PING、浏览器协议层自动 PONG，不依赖前端 JS 定时器(后台标签页会被冻结)
+                    pipeline.addLast(new IdleStateHandler(120, 0, 40, TimeUnit.SECONDS));
                     // 心跳处理
                     pipeline.addLast(new HeartbeatHandler());
                     // 业务处理

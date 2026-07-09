@@ -1,218 +1,167 @@
-// 配置（从页面 URL 推断或硬编码）
+// ===== HeartSync 前端：WebSocket 对话 + 记忆球 =====
 const WS_URL = `ws://${location.hostname}:8081/ws/chat?token=heartsync-dev-token`;
 const API_BASE = `http://${location.hostname}:8080/api`;
 
 let ws = null;
 let currentAiBubble = null;
+let heartbeatTimer = null;
 
-// DOM 元素
 const messagesEl = document.getElementById('messages');
 const inputEl = document.getElementById('input');
 const sendBtn = document.getElementById('sendBtn');
 const statusEl = document.getElementById('statusIndicator');
-const memoryListEl = document.getElementById('memoryList');
-const sidebarEl = document.getElementById('sidebar');
-const toggleBtn = document.getElementById('toggleSidebar');
+const statusText = document.getElementById('statusText');
 
-// 侧栏开关
-toggleBtn.addEventListener('click', () => {
-    sidebarEl.classList.toggle('collapsed');
-    toggleBtn.textContent = sidebarEl.classList.contains('collapsed') ? '▶' : '◀';
-});
-
-// 连接 WebSocket
+/* ---------- WebSocket ---------- */
 function connect() {
     ws = new WebSocket(WS_URL);
 
     ws.onopen = () => {
         setStatus(true);
-        inputEl.disabled = false;
-        sendBtn.disabled = false;
-        addSystemMessage('已连接');
+        inputEl.disabled = false; sendBtn.disabled = false;
+        addSys('已经在你身边啦～');
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = setInterval(() => {
+            if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ping' }));
+        }, 30000);
     };
-
     ws.onclose = () => {
         setStatus(false);
-        inputEl.disabled = true;
-        sendBtn.disabled = true;
-        addSystemMessage('连接断开，5 秒后重连...');
+        inputEl.disabled = true; sendBtn.disabled = true;
+        clearInterval(heartbeatTimer);
+        addSys('断开了，5 秒后重新找你…');
         setTimeout(connect, 5000);
     };
-
-    ws.onerror = () => {
-        setStatus(false);
-    };
-
-    ws.onmessage = (event) => {
-        try {
-            const msg = JSON.parse(event.data);
-            handleMessage(msg);
-        } catch (e) {
-            console.error('消息解析失败:', e);
-        }
+    ws.onerror = () => setStatus(false);
+    ws.onmessage = (e) => {
+        try { handleMessage(JSON.parse(e.data)); } catch (err) { console.error(err); }
     };
 }
 
-// 处理服务端消息
 function handleMessage(msg) {
     switch (msg.type) {
         case 'token':
-            if (!currentAiBubble) {
-                currentAiBubble = addAiBubble('');
-            }
+            if (!currentAiBubble) currentAiBubble = addBubble('ai', '');
             currentAiBubble.textContent += msg.content;
             currentAiBubble.classList.add('streaming');
-            scrollToBottom();
+            scrollBottom();
             break;
-
         case 'done':
-            if (currentAiBubble) {
-                currentAiBubble.classList.remove('streaming');
-                currentAiBubble = null;
-            }
+            if (currentAiBubble) { currentAiBubble.classList.remove('streaming'); currentAiBubble = null; }
             break;
-
         case 'push':
-            addAiBubble(msg.content);
+            addBubble('push', msg.content);
             break;
-
-        case 'pong':
-            // 心跳回复，无需处理
-            break;
+        case 'pong': break;
     }
 }
 
-// 发送消息
 function sendMessage() {
     const text = inputEl.value.trim();
     if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
-
-    // 显示用户消息
-    addUserBubble(text);
+    addBubble('user', text);
     inputEl.value = '';
-
-    // 发送
     ws.send(JSON.stringify({ type: 'chat', content: text }));
 }
 
-// UI 辅助
-function addUserBubble(text) {
-    const div = document.createElement('div');
-    div.className = 'message user';
-    div.innerHTML = `<div class="bubble">${escapeHtml(text)}</div>`;
-    messagesEl.appendChild(div);
-    scrollToBottom();
+/* ---------- UI ---------- */
+function addBubble(kind, text) {
+    const wrap = document.createElement('div');
+    wrap.className = 'msg ' + kind;
+    const b = document.createElement('div');
+    b.className = 'bubble';
+    b.textContent = text;
+    wrap.appendChild(b);
+    messagesEl.appendChild(wrap);
+    scrollBottom();
+    return b;
 }
-
-function addAiBubble(text) {
-    const div = document.createElement('div');
-    div.className = 'message ai';
-    const bubble = document.createElement('div');
-    bubble.className = 'bubble';
-    bubble.textContent = text;
-    div.appendChild(bubble);
-    messagesEl.appendChild(div);
-    scrollToBottom();
-    return bubble;
+function addSys(text) {
+    const wrap = document.createElement('div');
+    wrap.className = 'msg sys';
+    wrap.innerHTML = `<div class="bubble"></div>`;
+    wrap.querySelector('.bubble').textContent = text;
+    messagesEl.appendChild(wrap);
+    scrollBottom();
 }
-
-function addSystemMessage(text) {
-    const div = document.createElement('div');
-    div.className = 'message system';
-    div.innerHTML = `<div class="bubble">${escapeHtml(text)}</div>`;
-    messagesEl.appendChild(div);
-    scrollToBottom();
-}
-
 function setStatus(online) {
-    statusEl.textContent = online ? '● 在线' : '● 离线';
+    statusText.textContent = online ? '在线陪你' : '离线';
     statusEl.className = 'status ' + (online ? 'online' : 'offline');
 }
+function scrollBottom() { messagesEl.scrollTop = messagesEl.scrollHeight; }
 
-function scrollToBottom() {
-    messagesEl.scrollTop = messagesEl.scrollHeight;
-}
-
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
-
-// 加载记忆列表
-async function loadMemories() {
-    try {
-        const res = await fetch(`${API_BASE}/memories`);
-        const memories = await res.json();
-        memoryListEl.innerHTML = memories.map(m => {
-            const safeType = escapeHtml(m.type || '');
-            const safeTitle = escapeHtml(m.title || '');
-            const safePath = escapeHtml(m.path || '');
-            return `<div class="memory-item" data-path="${safePath}">
-                <span class="type">${safeType}</span>
-                <span>${safeTitle}</span>
-            </div>`;
-        }).join('');
-    } catch (e) {
-        memoryListEl.innerHTML = '<div class="loading">加载失败</div>';
-    }
-}
-
-// 记忆侧栏点击事件（事件委托）
-memoryListEl.addEventListener('click', async (e) => {
-    const item = e.target.closest('.memory-item');
-    if (!item) return;
-    const path = item.dataset.path;
-    if (!path) return;
-    await openMemory(path);
-});
-
-// 打开记忆详情弹窗
-async function openMemory(path) {
-    try {
-        const res = await fetch(`${API_BASE}/memories/${encodeURIComponent(path)}`);
-        if (!res.ok) throw new Error('Not found');
-        const page = await res.json();
-        document.getElementById('modalTitle').textContent = page.title || path;
-        document.getElementById('modalBody').textContent = page.content || '(空)';
-        document.getElementById('modalOverlay').dataset.path = path;
-        document.getElementById('modalOverlay').classList.add('active');
-    } catch (e) {
-        alert('加载记忆失败: ' + path);
-    }
-}
-
-// 关闭弹窗
-document.getElementById('modalClose').addEventListener('click', () => {
-    document.getElementById('modalOverlay').classList.remove('active');
-});
-document.getElementById('modalOverlay').addEventListener('click', (e) => {
-    if (e.target === document.getElementById('modalOverlay')) {
-        document.getElementById('modalOverlay').classList.remove('active');
-    }
-});
-
-// 删除记忆
-document.getElementById('modalDelete').addEventListener('click', async () => {
-    const path = document.getElementById('modalOverlay').dataset.path;
-    if (!path) return;
-    if (!confirm('确定删除这条记忆？')) return;
-    try {
-        const res = await fetch(`${API_BASE}/memories/${encodeURIComponent(path)}`, { method: 'DELETE' });
-        if (!res.ok) throw new Error('Delete failed');
-        document.getElementById('modalOverlay').classList.remove('active');
-        await loadMemories(); // 刷新列表
-    } catch (e) {
-        alert('删除失败: ' + path);
-    }
-});
-
-// 事件绑定
 sendBtn.addEventListener('click', sendMessage);
-inputEl.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') sendMessage();
-});
+inputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendMessage(); });
 
-// 启动
+/* ---------- 记忆球 ---------- */
+const overlay = document.getElementById('ballOverlay');
+const GROUP_COLOR = {
+    user:    { bg: '#8fb8e8', border: '#6f9fd8' },
+    lover:   { bg: '#eaa0b8', border: '#e2789a' },
+    other:   { bg: '#9dd6b6', border: '#7cc59d' },
+    event:   { bg: '#f2c795', border: '#e6ad6e' },
+    detail:  { bg: '#d9ccee', border: '#c3b0e2' },
+    persona: { bg: '#f4b8c6', border: '#e89aad' },
+    state:   { bg: '#bcd6ce', border: '#9cc0b5' },
+};
+let network = null;
+
+document.getElementById('openBall').addEventListener('click', openBall);
+document.getElementById('closeBall').addEventListener('click', closeBall);
+overlay.addEventListener('click', (e) => { if (e.target === overlay) closeBall(); });
+
+async function openBall() {
+    overlay.classList.add('active');
+    try {
+        const res = await fetch(`${API_BASE.replace('/api','')}/api/memory-graph`);
+        const data = await res.json();
+        renderGraph(data);
+    } catch (e) {
+        document.getElementById('ballTip').textContent = '记忆加载失败了…';
+    }
+}
+function closeBall() { overlay.classList.remove('active'); }
+
+function renderGraph(data) {
+    const nodes = (data.nodes || []).map(n => {
+        const c = GROUP_COLOR[n.group] || GROUP_COLOR.detail;
+        const isHub = n.group !== 'detail';
+        return {
+            id: n.id, label: n.label, value: n.size || 12,
+            shape: 'dot',
+            color: { background: c.bg, border: c.border,
+                     highlight: { background: c.bg, border: c.border } },
+            font: { color: isHub ? '#4A4048' : '#8a7f86',
+                    size: isHub ? 16 : 12, face: 'Noto Sans SC',
+                    strokeWidth: 4, strokeColor: '#ffffff' },
+        };
+    });
+    const edges = (data.edges || []).map(e => ({
+        from: e.from, to: e.to,
+        color: { color: 'rgba(180,160,175,0.35)', highlight: '#eaa0b8' },
+        width: 1.4, smooth: { type: 'continuous' },
+    }));
+
+    const container = document.getElementById('ballGraph');
+    if (network) network.destroy();
+    network = new vis.Network(container, { nodes, edges }, {
+        physics: {
+            barnesHut: { gravitationalConstant: -4000, springLength: 110, springConstant: 0.03, damping: 0.5 },
+            stabilization: { iterations: 180 },
+        },
+        interaction: { hover: true, tooltipDelay: 120 },
+        nodes: { borderWidth: 2, shadow: { enabled: true, color: 'rgba(120,90,100,0.15)', size: 8, y: 3 } },
+    });
+    network.on('click', (params) => {
+        const tip = document.getElementById('ballTip');
+        if (params.nodes.length) {
+            const n = nodes.find(x => x.id === params.nodes[0]);
+            tip.textContent = '💛 ' + (n ? n.label : '');
+        } else {
+            tip.textContent = '拖动查看 · 滚轮缩放 · 点一颗看详情';
+        }
+    });
+}
+
+/* ---------- 启动 ---------- */
 connect();
-loadMemories();

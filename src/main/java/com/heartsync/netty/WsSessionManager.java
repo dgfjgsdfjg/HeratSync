@@ -25,28 +25,28 @@ public class WsSessionManager {
 
     /**
      * 用户上线，绑定连接
+     * 不踢旧连接：单用户多标签页都保留，避免同 userId 互踢造成重连风暴。
+     * 主动推送发往最近一次登录的连接。
      */
     public void onConnect(String userId, Channel channel) {
-        Channel old = userChannels.put(userId, channel);
-        if (old != null && old != channel) {
-            // 同一用户旧连接存在，关闭旧连接
-            log.info("用户重复登录，关闭旧连接: userId={}", userId);
-            old.close();
-        }
+        userChannels.put(userId, channel);
         channelUsers.put(channel.id().asShortText(), userId);
         allChannels.add(channel);
-        log.info("用户上线: userId={}, channelId={}, 当前在线: {}", userId, channel.id().asShortText(), allChannels.size());
+        log.info("用户上线: userId={}, channelId={}, 当前连接数: {}", userId, channel.id().asShortText(), allChannels.size());
     }
 
     /**
      * 用户下线，清理映射
+     * 只在 userChannels 里当前映射的就是本连接时才移除，
+     * 否则会把「同用户更新的连接」误删（旧连接下线不该影响新连接）
      */
     public void onDisconnect(Channel channel) {
         String channelId = channel.id().asShortText();
         String userId = channelUsers.remove(channelId);
         if (userId != null) {
-            userChannels.remove(userId);
-            log.info("用户下线: userId={}, channelId={}, 当前在线: {}", userId, channelId, allChannels.size());
+            // 条件移除：仅当映射值仍是本连接
+            userChannels.remove(userId, channel);
+            log.info("用户下线: userId={}, channelId={}, 当前连接数: {}", userId, channelId, allChannels.size());
         }
         allChannels.remove(channel);
     }

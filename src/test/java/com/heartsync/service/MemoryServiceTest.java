@@ -38,7 +38,7 @@ class MemoryServiceTest {
         luceneIndex.buildIndex(vaultStore);
 
         // MemoryService 使用 mock LlmClient（recall 不依赖 LLM，remember 依赖）
-        memoryService = new MemoryService(vaultStore, luceneIndex, null);
+        memoryService = new MemoryService(vaultStore, luceneIndex, null, null);
     }
 
     @AfterEach

@@ -103,12 +103,12 @@ AI 陪伴恋人，**核心差异点 = 极致陪伴感**：
 
 ```
 1. 客户端 send({"type":"chat", "content":"今天心情不好"})
-2. NettyWsHandler → CompanionService.chat(userId, message)
+2. WsChatHandler → CompanionService.chat(userId, message)
 3. CompanionService:
    a. MemoryService.recall(message) → 召回相关记忆片段
-      - Lucene BM25 全文命中 Top-N 篇 md
-      - 从命中页顺 [[wikilink]] 拉一层邻居，合并去重
-   b. 拼 prompt = 人设(system) + 关系/情绪状态 + 记忆片段 + 最近N轮对话 + 本轮输入
+      - Lucene BM25 全文命中 Top-5 篇 md
+      - 从命中页顺 [[wikilink]] 拉一层邻居，按标题去重合并
+   b. 拼 prompt = 人设(system) + 关系/情绪状态 + 记忆片段 + 最近 10 轮对话 + 本轮输入
    c. LlmClient.stream(prompt) → Flux<String> token 流
       - 每个 token 经 WebSocket 推回客户端（{"type":"token", "content":"怎"}）
 4. 回复完毕，推 {"type":"done", "messageId":"msg_xxx"}
@@ -163,7 +163,13 @@ links: [[用户-工作]], [[用户-猫]]
 养了只橘猫叫橘子，2023年领养的。
 ```
 
-### 6.3 检索流程
+### 6.3 索引策略
+
+- **启动时**：扫描 vault 目录全量建 Lucene 索引（内存索引，启动快）
+- **运行时**：记忆写回后增量更新索引（单篇 md 变更 → 重建该文档的 Lucene 条目）
+- **索引字段**：`path`（文件路径）、`title`（frontmatter 标题）、`body`（正文内容）、`type`（分类）
+
+### 6.4 检索流程
 
 ```
 输入: "橘子最近怎么样了"
@@ -177,7 +183,7 @@ wikilink 扩展: 从 [[用户-猫]] 拉出 [[用户]]、[[用户-日常]]
 喂给 LLM 拼 prompt
 ```
 
-### 6.4 写回流程
+### 6.5 写回流程
 
 ```
 本轮对话: 用户说"橘子最近不爱吃猫粮了，我换了皇家"
@@ -261,7 +267,9 @@ onDisconnect() → 清理映射 → 更新离线时间
 | GET | `/api/memories/{id}` | 查看某篇记忆 |
 | DELETE | `/api/memories/{id}` | 删除某篇记忆（用户控制权） |
 
-WebSocket 入口：`ws://host:8081/ws/chat?token={auth_token}`
+WebSocket 入口：`ws://host:8081/ws/chat?token={jwt_token}`
+
+> 认证：握手阶段通过 URL query 参数传 JWT token，AuthHandler 在 WebSocket 升级前校验。阶段 1 先用简单固定 token 字符串，后续换 JWT。
 
 ---
 

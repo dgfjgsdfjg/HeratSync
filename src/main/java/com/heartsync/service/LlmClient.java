@@ -85,4 +85,42 @@ public class LlmClient {
 
         return sink.asFlux();
     }
+
+    /**
+     * 同步补全：给一个 prompt，阻塞返回完整回复
+     * 复用流式 model，收集全部 token 后拼成整串，用于记忆事实抽取等非流式场景
+     * @param prompt 单轮提示词
+     * @return 完整回复文本；失败返回空串
+     */
+    public String complete(String prompt) {
+        CompletableFuture<String> future = new CompletableFuture<>();
+        StringBuilder sb = new StringBuilder();
+        List<dev.langchain4j.data.message.ChatMessage> messages = new ArrayList<>();
+        messages.add(new UserMessage(prompt));
+
+        model.chat(messages, new StreamingChatResponseHandler() {
+            @Override
+            public void onPartialResponse(String partialResponse) {
+                sb.append(partialResponse);
+            }
+
+            @Override
+            public void onCompleteResponse(dev.langchain4j.model.chat.response.ChatResponse response) {
+                future.complete(sb.toString());
+            }
+
+            @Override
+            public void onError(Throwable error) {
+                future.completeExceptionally(error);
+            }
+        });
+
+        try {
+            // 阻塞等待，最多 60 秒
+            return future.get(60, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (Exception e) {
+            log.error("同步补全失败, prompt={}", prompt, e);
+            return "";
+        }
+    }
 }

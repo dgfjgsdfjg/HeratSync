@@ -70,6 +70,10 @@ function handleMessage(msg) {
                 currentAiBubble.classList.remove('streaming');
                 currentAiBubble = null;
             }
+            // 对话完成后刷新记忆侧栏，展示 AI 新记住的事实
+            // 记忆写回是异步的（done 后还要再调 LLM 抽取事实），延迟刷新等它落盘
+            // ponytail: 固定延迟 3s，够覆盖抽取耗时；阶段 2 可改为服务端推送 memory-updated 事件
+            setTimeout(loadMemories, 3000);
             break;
 
         case 'push':

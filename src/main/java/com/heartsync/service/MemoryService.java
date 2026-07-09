@@ -117,12 +117,20 @@ public class MemoryService {
      */
     private String buildFactExtractionPrompt(String userMessage, String aiResponse) {
         return """
-            从以下对话中抽取值得记住的事实。如果用户分享了新信息或更新了旧信息，返回事实。
-            如果没有任何值得记住的新信息，返回 NONE。
+            你是一个记忆抽取器。从下面对话中抽取所有值得长期记住的事实（用户的个人信息、喜好、习惯、关系、经历等）。
 
-            格式: 实体名 | 事实内容 | 动作(create/update)
-            示例: 橘子 | 最近不爱吃猫粮，主人换了皇家猫粮 | update
+            规则：
+            1. 每条事实单独一行，格式严格为：实体名 | 事实内容 | 动作(create/update)
+            2. 一次可以抽取多条，每条一行
+            3. 实体名是这条事实归属的对象（人名/宠物名/物品名等），会作为记忆文件名
+            4. 只输出事实行，不要任何解释、编号、前后缀
+            5. 如果没有任何值得记住的新信息，只输出 NONE
 
+            示例输出：
+            小明 | 在杭州做后端开发 | create
+            橘子 | 小明养的橘猫 | create
+
+            对话：
             用户: %s
             恋人: %s
             """.formatted(userMessage, aiResponse);
@@ -130,35 +138,52 @@ public class MemoryService {
 
     /**
      * 同步调用 LLM 抽取事实
-     * 占位实现：Task 8 完成 LlmClient 同步方法后替换
      */
     private String extractFactSync(String prompt) {
-        // 阶段 2 改为 LangChain4j 的 AiServices 结构化输出
-        // 实际实现见 Task 8 中对 DeepSeek 的同步调用封装
-        return NO_FACT_FLAG;
+        String result = llmClient.complete(prompt);
+        return (result == null || result.isBlank()) ? NO_FACT_FLAG : result.trim();
     }
 
     /**
-     * 将抽取的事实写入 vault
-     * 解析 "实体名 | 事实内容 | 动作" 格式
+     * 将抽取结果写入 vault（支持多行，每行一条事实）
      */
     private void applyFactToVault(String extracted) {
-        String[] parts = extracted.split("\\|");
+        // 逐行处理，每行一条 "实体名 | 事实内容 | 动作"
+        for (String line : extracted.split("\\r?\\n")) {
+            String trimmed = line.trim();
+            if (trimmed.isEmpty() || NO_FACT_FLAG.equals(trimmed)) {
+                continue;
+            }
+            applyOneFact(trimmed);
+        }
+    }
+
+    /**
+     * 写入单条事实
+     */
+    private void applyOneFact(String line) {
+        String[] parts = line.split("\\|");
         if (parts.length < 3) {
-            log.warn("事实格式不合法，跳过写入: {}", extracted);
+            log.warn("事实格式不合法，跳过: {}", line);
             return;
         }
 
-        String entity = parts[0].trim();
+        String entity = sanitizeEntity(parts[0].trim());
         String fact = parts[1].trim();
         String action = parts[2].trim();
+        if (entity.isEmpty() || fact.isEmpty()) {
+            return;
+        }
         String fileName = "facts/" + entity + ".md";
 
         try {
             VaultPage page;
             try {
-                // 文件已存在 -> update: 追加事实
+                // 文件已存在 -> update: 追加事实（去重：已含则跳过）
                 page = vaultStore.readPage(fileName);
+                if (page.getContent() != null && page.getContent().contains(fact)) {
+                    return;
+                }
                 page.setContent(page.getContent() + "\n" + fact);
             } catch (IOException e) {
                 // 文件不存在 -> create: 新建事实页
@@ -174,5 +199,12 @@ public class MemoryService {
         } catch (IOException e) {
             log.error("记忆写入 vault 失败: file={}", fileName, e);
         }
+    }
+
+    /**
+     * 清洗实体名，去掉不能作文件名的字符
+     */
+    private String sanitizeEntity(String entity) {
+        return entity.replaceAll("[\\\\/:*?\"<>|]", "").trim();
     }
 }

@@ -7,7 +7,6 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import io.netty.util.AttributeKey;
-import io.netty.util.ReferenceCountUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -30,8 +29,9 @@ public class ChatHandler extends SimpleChannelInboundHandler<TextWebSocketFrame>
 
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, TextWebSocketFrame frame) throws Exception {
+        // 注意：SimpleChannelInboundHandler 会在本方法返回后自动释放 frame，
+        // 这里不能再手动 release，否则双重释放触发 IllegalReferenceCountException
         String text = frame.text();
-        ReferenceCountUtil.release(frame); // 释放 ByteBuf
 
         ChatMessage msg;
         try {

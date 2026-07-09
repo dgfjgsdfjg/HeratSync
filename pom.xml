@@ -86,6 +86,10 @@
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <!-- 强制 UTF-8，否则中文 Windows(Java17)默认 GBK 会致 DeepSeek 流式响应中文乱码 -->
+                    <jvmArguments>-Dfile.encoding=UTF-8 -Dsun.jnu.encoding=UTF-8</jvmArguments>
+                </configuration>
             </plugin>
         </plugins>
     </build>

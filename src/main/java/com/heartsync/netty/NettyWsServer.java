@@ -8,6 +8,7 @@ import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.handler.codec.http.HttpObjectAggregator;
 import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.handler.codec.http.websocketx.WebSocketServerProtocolHandler;
+import io.netty.handler.codec.http.websocketx.WebSocketServerProtocolConfig;
 import io.netty.handler.timeout.IdleStateHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -72,7 +73,13 @@ public class NettyWsServer {
                     // 认证（WebSocket 握手前）
                     pipeline.addLast(new AuthHandler(authToken, sessionManager));
                     // WebSocket 协议升级
-                    pipeline.addLast(new WebSocketServerProtocolHandler(wsPath));
+                    // checkStartsWith=true: URI 带 query 参数(?token=xxx)时用前缀匹配，
+                    // 否则默认精确匹配会因 "/ws/chat?token=xxx" != "/ws/chat" 而不握手
+                    WebSocketServerProtocolConfig wsConfig = WebSocketServerProtocolConfig.newBuilder()
+                        .websocketPath(wsPath)
+                        .checkStartsWith(true)
+                        .build();
+                    pipeline.addLast(new WebSocketServerProtocolHandler(wsConfig));
                     // 空闲检测（60 秒无读 -> 断开）
                     pipeline.addLast(new IdleStateHandler(60, 0, 0, TimeUnit.SECONDS));
                     // 心跳处理

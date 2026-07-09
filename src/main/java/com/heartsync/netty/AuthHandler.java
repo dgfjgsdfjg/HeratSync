@@ -47,9 +47,10 @@ public class AuthHandler extends ChannelInboundHandlerAdapter {
             // 将 userId 存到 channel attr 中，后续 Handler 使用
             ctx.channel().attr(io.netty.util.AttributeKey.valueOf("userId")).set(userId);
 
-            // 移除自身（认证只做一次）
-            ctx.pipeline().remove(this);
+            // 先转发请求让 WebSocketServerProtocolHandler 完成握手，再移除自身
+            // 注意：必须先 fireChannelRead 再 remove，否则移除后链路错乱，101 响应发不出去
             super.channelRead(ctx, msg);
+            ctx.pipeline().remove(this);
         } else {
             super.channelRead(ctx, msg);
         }

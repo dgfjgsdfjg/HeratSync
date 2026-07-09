@@ -23,7 +23,7 @@ public class ConfigController {
         // ponytail: 阶段 1 简单实现，直接改写 vault 文件
         String newPersona = body.get("persona");
         if (newPersona != null) {
-            personaService.updateStateField("persona", newPersona);
+            personaService.updatePersona(newPersona);
         }
         return Map.of("status", "ok");
     }

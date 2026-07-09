@@ -68,6 +68,18 @@ public class PersonaService {
     }
 
     /**
+     * 更新人设内容（直接写入 vault/persona/default.md）
+     */
+    public void updatePersona(String newContent) {
+        try {
+            vaultStore.updatePage(PERSONA_PATH, newContent);
+            log.info("人设更新成功");
+        } catch (IOException e) {
+            log.error("更新人设失败", e);
+        }
+    }
+
+    /**
      * 获取当前情绪
      */
     public String getMood() {

@@ -28,15 +28,17 @@ public class MemoryController {
             .collect(Collectors.toList());
     }
 
-    @GetMapping("/{path}")
+    @GetMapping("/{*path}")
     public VaultPage getMemory(@PathVariable String path) throws IOException {
-        // 路径中的 / 会被 URL 编码，需要还原
-        return vaultStore.readPage(path);
+        // {*path} 匹配多层路径（如 facts/user.md），Spring 传入时带前导 /
+        String normalized = path.startsWith("/") ? path.substring(1) : path;
+        return vaultStore.readPage(normalized);
     }
 
-    @DeleteMapping("/{path}")
+    @DeleteMapping("/{*path}")
     public Map<String, String> deleteMemory(@PathVariable String path) throws IOException {
-        vaultStore.deletePage(path);
+        String normalized = path.startsWith("/") ? path.substring(1) : path;
+        vaultStore.deletePage(normalized);
         return Map.of("status", "deleted");
     }
 }

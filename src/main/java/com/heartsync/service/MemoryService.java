@@ -100,7 +100,9 @@ public class MemoryService {
         // 异步执行，失败不影响主流程
         CompletableFuture.runAsync(() -> {
             try {
-                String factPrompt = buildFactExtractionPrompt(userMessage, aiResponse);
+                // 先读出已知事实，喂给抽取器，避免把同一偏好反复记成多条（如「喜欢红茶」被重复抽取）
+                String knownFacts = renderKnownFacts();
+                String factPrompt = buildFactExtractionPrompt(userMessage, aiResponse, knownFacts);
                 String extracted = extractFactSync(factPrompt);
                 if (extracted != null && !extracted.isBlank()
                     && !NO_FACT_FLAG.equals(extracted.trim())) {
@@ -113,27 +115,47 @@ public class MemoryService {
     }
 
     /**
-     * 构建事实抽取 prompt
+     * 渲染当前全部已知事实，供抽取器去重参考
+     * 单用户 vault 规模小，全量读取可接受
      */
-    private String buildFactExtractionPrompt(String userMessage, String aiResponse) {
+    private String renderKnownFacts() {
+        try {
+            return vaultStore.readAllPages().stream()
+                .filter(p -> "fact".equals(p.getType()) && p.getContent() != null && !p.getContent().isBlank())
+                .map(p -> "[" + p.getTitle() + "] " + p.getContent().replace("\n", "；"))
+                .collect(Collectors.joining("\n"));
+        } catch (IOException e) {
+            log.error("读取已知事实失败", e);
+            return "";
+        }
+    }
+
+    /**
+     * 构建事实抽取 prompt
+     * @param knownFacts 已知事实文本，让 LLM 只抽取尚未记录的新信息，避免同义重复
+     */
+    private String buildFactExtractionPrompt(String userMessage, String aiResponse, String knownFacts) {
         return """
-            你是一个记忆抽取器。从下面对话中抽取所有值得长期记住的事实（用户的个人信息、喜好、习惯、关系、经历等）。
+            你是一个记忆抽取器。从下面对话中抽取值得长期记住的【新】事实（用户的个人信息、喜好、习惯、关系、经历等）。
 
             规则：
             1. 每条事实单独一行，格式严格为：实体名 | 事实内容 | 动作(create/update)
-            2. 一次可以抽取多条，每条一行
-            3. 实体名是这条事实归属的对象（人名/宠物名/物品名等），会作为记忆文件名
-            4. 只输出事实行，不要任何解释、编号、前后缀
-            5. 如果没有任何值得记住的新信息，只输出 NONE
+            2. 只抽取「已知记忆」里【没有】的新信息。语义重复的（哪怕措辞不同，如「爱喝红茶」vs「喜欢红茶」）绝对不要再输出。
+            3. 实体名是这条事实归属的对象（人名/宠物名/物品名等），会作为记忆文件名；同一对象请复用已有实体名，不要新造。
+            4. 只输出事实行，不要任何解释、编号、前后缀。
+            5. 如果本轮没有任何值得记住的新信息，只输出 NONE。
+
+            已知记忆（这些都记过了，不要重复）：
+            %s
 
             示例输出：
             小明 | 在杭州做后端开发 | create
             橘子 | 小明养的橘猫 | create
 
-            对话：
+            本轮对话：
             用户: %s
             恋人: %s
-            """.formatted(userMessage, aiResponse);
+            """.formatted(knownFacts == null || knownFacts.isBlank() ? "（暂无）" : knownFacts, userMessage, aiResponse);
     }
 
     /**

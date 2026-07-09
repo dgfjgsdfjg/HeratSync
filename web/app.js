@@ -167,10 +167,15 @@ memoryListEl.addEventListener('click', async (e) => {
     await openMemory(path);
 });
 
+// 编码路径：按 / 分段编码，保留真斜杠（后端 {*path} 需要真斜杠，Tomcat 拒收 %2F）
+function encodePath(path) {
+    return path.split('/').map(encodeURIComponent).join('/');
+}
+
 // 打开记忆详情弹窗
 async function openMemory(path) {
     try {
-        const res = await fetch(`${API_BASE}/memories/${encodeURIComponent(path)}`);
+        const res = await fetch(`${API_BASE}/memories/${encodePath(path)}`);
         if (!res.ok) throw new Error('Not found');
         const page = await res.json();
         document.getElementById('modalTitle').textContent = page.title || path;
@@ -198,7 +203,7 @@ document.getElementById('modalDelete').addEventListener('click', async () => {
     if (!path) return;
     if (!confirm('确定删除这条记忆？')) return;
     try {
-        const res = await fetch(`${API_BASE}/memories/${encodeURIComponent(path)}`, { method: 'DELETE' });
+        const res = await fetch(`${API_BASE}/memories/${encodePath(path)}`, { method: 'DELETE' });
         if (!res.ok) throw new Error('Delete failed');
         document.getElementById('modalOverlay').classList.remove('active');
         await loadMemories(); // 刷新列表

@@ -187,10 +187,10 @@ async function openMemDetail(node) {
     currentMemNode = node;
     overlay.classList.add('active');
 
-    // 加载内容 — 用文件路径调 API
+    // 加载内容 — 用文件路径调 API，不 encode（路径含 /）
     const fetchPath = node.data_path || title;
     try {
-        const res = await fetch(`${API_BASE}/memories/${encodeURIComponent(fetchPath)}`);
+        const res = await fetch(`${API_BASE}/memories/${fetchPath}`);
         if (res.ok) {
             currentMemPage = await res.json();
             document.getElementById('memEditContent').value = currentMemPage.content || '';
@@ -230,7 +230,7 @@ async function saveMemory() {
 
     const path = currentMemPage.path || (`facts/${newTitle}.md`);
     try {
-        const res = await fetch(`${API_BASE}/memories/${encodeURIComponent(path)}`, {
+        const res = await fetch(`${API_BASE}/memories/${path}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ title: newTitle, content: newContent })
@@ -256,7 +256,7 @@ async function deleteMemory() {
 
     const path = currentMemPage.path || (`facts/${currentMemPage.title}.md`);
     try {
-        const res = await fetch(`${API_BASE}/memories/${encodeURIComponent(path)}`, { method: 'DELETE' });
+        const res = await fetch(`${API_BASE}/memories/${path}`, { method: 'DELETE' });
         if (res.ok) {
             document.getElementById('memDetailOverlay').classList.remove('active');
             currentMemNode = null; currentMemPage = null;

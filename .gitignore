@@ -3,3 +3,11 @@ target/
 .run/
 .playwright-mcp/
 vault/heartsync.db
+.mcp.json
+*.log
+downloads/
+node_modules/
+package.json
+package-lock.json
+playwright-console.txt
+skills-lock.json

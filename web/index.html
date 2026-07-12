@@ -65,6 +65,28 @@
         </div>
     </div>
 
+    <!-- 记忆详情编辑弹窗 -->
+    <div class="mem-detail-overlay" id="memDetailOverlay" aria-hidden="true">
+        <div class="mem-detail-panel">
+            <div class="mem-detail-header">
+                <h3 id="memDetailTitle">记忆详情</h3>
+                <button class="mem-detail-close" id="closeMemDetail">✕</button>
+            </div>
+            <div class="mem-detail-body">
+                <label class="mem-detail-label">标题</label>
+                <input type="text" id="memEditTitle" class="mem-detail-input" disabled>
+                <label class="mem-detail-label">内容</label>
+                <textarea id="memEditContent" class="mem-detail-textarea" rows="6"></textarea>
+            </div>
+            <div class="mem-detail-actions">
+                <button class="mem-btn mem-btn-edit" id="btnEditMem">✎ 编辑</button>
+                <button class="mem-btn mem-btn-save" id="btnSaveMem" style="display:none">✓ 保存</button>
+                <button class="mem-btn mem-btn-cancel" id="btnCancelEdit" style="display:none">取消</button>
+                <button class="mem-btn mem-btn-delete" id="btnDeleteMem">🗑 删除</button>
+            </div>
+        </div>
+    </div>
+
     <script src="app.js"></script>
 </body>
 </html>

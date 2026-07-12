@@ -156,12 +156,126 @@ function renderGraph(data) {
         const tip = document.getElementById('ballTip');
         if (params.nodes.length) {
             const n = nodes.find(x => x.id === params.nodes[0]);
-            tip.textContent = '💛 ' + (n ? n.label : '');
+            if (n && n.id && n.id.startsWith('page:')) {
+                openMemDetail(n);
+            } else {
+                tip.textContent = '💛 ' + (n ? n.label : '');
+            }
         } else {
             tip.textContent = '拖动查看 · 滚轮缩放 · 点一颗看详情';
         }
     });
 }
+
+/* ---------- 记忆详情编辑 ---------- */
+let currentMemNode = null;
+let currentMemPage = null;
+
+async function openMemDetail(node) {
+    const title = node.label;
+    const overlay = document.getElementById('memDetailOverlay');
+    document.getElementById('memDetailTitle').textContent = title;
+    document.getElementById('memEditTitle').value = title;
+    document.getElementById('memEditContent').value = '加载中…';
+    document.getElementById('memEditContent').disabled = true;
+    document.getElementById('btnEditMem').style.display = 'inline-block';
+    document.getElementById('btnSaveMem').style.display = 'none';
+    document.getElementById('btnCancelEdit').style.display = 'none';
+    document.getElementById('btnDeleteMem').style.display = 'inline-block';
+
+    currentMemNode = node;
+    overlay.classList.add('active');
+
+    // 加载内容
+    try {
+        const res = await fetch(`${API_BASE}/memories/${encodeURIComponent(title)}`);
+        if (res.ok) {
+            currentMemPage = await res.json();
+            document.getElementById('memEditContent').value = currentMemPage.content || '';
+        } else {
+            document.getElementById('memEditContent').value = '（暂无内容）';
+        }
+    } catch (e) {
+        document.getElementById('memEditContent').value = '加载失败';
+    }
+}
+
+function enterEditMode() {
+    document.getElementById('memEditContent').disabled = false;
+    document.getElementById('memEditTitle').disabled = false;
+    document.getElementById('btnEditMem').style.display = 'none';
+    document.getElementById('btnDeleteMem').style.display = 'none';
+    document.getElementById('btnSaveMem').style.display = 'inline-block';
+    document.getElementById('btnCancelEdit').style.display = 'inline-block';
+}
+
+function cancelEdit() {
+    document.getElementById('memEditContent').disabled = true;
+    document.getElementById('memEditTitle').disabled = true;
+    document.getElementById('memEditContent').value = currentMemPage ? (currentMemPage.content || '') : '';
+    document.getElementById('memEditTitle').value = currentMemPage ? (currentMemPage.title || '') : '';
+    document.getElementById('btnEditMem').style.display = 'inline-block';
+    document.getElementById('btnDeleteMem').style.display = 'inline-block';
+    document.getElementById('btnSaveMem').style.display = 'none';
+    document.getElementById('btnCancelEdit').style.display = 'none';
+}
+
+async function saveMemory() {
+    if (!currentMemPage) return;
+    const newTitle = document.getElementById('memEditTitle').value.trim();
+    const newContent = document.getElementById('memEditContent').value.trim();
+    if (!newTitle) { alert('标题不能为空'); return; }
+
+    const path = currentMemPage.path || (`facts/${newTitle}.md`);
+    try {
+        const res = await fetch(`${API_BASE}/memories/${encodeURIComponent(path)}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title: newTitle, content: newContent })
+        });
+        if (res.ok) {
+            currentMemPage = await res.json();
+            document.getElementById('memDetailTitle').textContent = newTitle;
+            document.getElementById('memEditContent').disabled = true;
+            document.getElementById('memEditTitle').disabled = true;
+            document.getElementById('btnEditMem').style.display = 'inline-block';
+            document.getElementById('btnDeleteMem').style.display = 'inline-block';
+            document.getElementById('btnSaveMem').style.display = 'none';
+            document.getElementById('btnCancelEdit').style.display = 'none';
+        }
+    } catch (e) {
+        alert('保存失败');
+    }
+}
+
+async function deleteMemory() {
+    if (!currentMemPage) return;
+    if (!confirm(`确定删除「${currentMemPage.title}」的所有记忆吗？`)) return;
+
+    const path = currentMemPage.path || (`facts/${currentMemPage.title}.md`);
+    try {
+        const res = await fetch(`${API_BASE}/memories/${encodeURIComponent(path)}`, { method: 'DELETE' });
+        if (res.ok) {
+            document.getElementById('memDetailOverlay').classList.remove('active');
+            currentMemNode = null; currentMemPage = null;
+            openBall(); // 刷新图谱
+        }
+    } catch (e) {
+        alert('删除失败');
+    }
+}
+
+document.getElementById('closeMemDetail').addEventListener('click', () => {
+    document.getElementById('memDetailOverlay').classList.remove('active');
+});
+document.getElementById('memDetailOverlay').addEventListener('click', (e) => {
+    if (e.target === e.currentTarget)
+        document.getElementById('memDetailOverlay').classList.remove('active');
+});
+document.getElementById('btnEditMem').addEventListener('click', enterEditMode);
+document.getElementById('btnCancelEdit').addEventListener('click', cancelEdit);
+document.getElementById('btnSaveMem').addEventListener('click', saveMemory);
+document.getElementById('btnDeleteMem').addEventListener('click', deleteMemory);
 
 /* ---------- 启动 ---------- */
 connect();

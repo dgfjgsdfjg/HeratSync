@@ -41,4 +41,21 @@ public class MemoryController {
         vaultStore.deletePage(normalized);
         return Map.of("status", "deleted");
     }
+
+    /**
+     * 更新记忆页内容，用于记忆球编辑
+     */
+    @PutMapping("/{*path}")
+    public VaultPage updateMemory(@PathVariable String path, @RequestBody Map<String, String> body) throws IOException {
+        String normalized = path.startsWith("/") ? path.substring(1) : path;
+        VaultPage page = vaultStore.readPage(normalized);
+        if (body.containsKey("content")) {
+            page.setContent(body.get("content"));
+        }
+        if (body.containsKey("title")) {
+            page.setTitle(body.get("title"));
+        }
+        vaultStore.writePage(normalized, page);
+        return page;
+    }
 }

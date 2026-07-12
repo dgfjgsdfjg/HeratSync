@@ -129,6 +129,7 @@ function renderGraph(data) {
         return {
             id: n.id, label: n.label, value: n.size || 12,
             shape: 'dot',
+            data_path: n.data_path || '',  // 文件路径，用于编辑
             color: { background: c.bg, border: c.border,
                      highlight: { background: c.bg, border: c.border } },
             font: { color: isHub ? '#4A4048' : '#8a7f86',
@@ -186,9 +187,10 @@ async function openMemDetail(node) {
     currentMemNode = node;
     overlay.classList.add('active');
 
-    // 加载内容
+    // 加载内容 — 用文件路径调 API
+    const fetchPath = node.data_path || title;
     try {
-        const res = await fetch(`${API_BASE}/memories/${encodeURIComponent(title)}`);
+        const res = await fetch(`${API_BASE}/memories/${encodeURIComponent(fetchPath)}`);
         if (res.ok) {
             currentMemPage = await res.json();
             document.getElementById('memEditContent').value = currentMemPage.content || '';

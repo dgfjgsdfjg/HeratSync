@@ -44,7 +44,10 @@ public class MemoryGraphController {
             boolean newHub = seenHubs.add(hubId);
             if (newHub) {
                 String group = groupOf(p.getTitle(), p.getType());
-                nodes.add(node(hubId, p.getTitle(), group, 28));
+                Map<String, Object> hub = node(hubId, p.getTitle(), group, 28);
+                // 把文件路径带进节点数据，前端编辑时用于 API 调用
+                if (p.getPath() != null) hub.put("data_path", p.getPath());
+                nodes.add(hub);
             }
 
             // 每条事实一个叶子节点（ID 用全局计数保证唯一）

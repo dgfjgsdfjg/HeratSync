@@ -92,7 +92,7 @@ public class PushService {
     }
 
     /**
-     * 检查用户今天是否有事件（生日/纪念日等），有则直接推送
+     * 检查用户今天是否有事件（生日/纪念日等），有则让 LLM 生成自然关心的文案
      * @return true 表示已推送日历消息
      */
     private boolean tryCalendarPush(String userId) {
@@ -103,17 +103,34 @@ public class PushService {
             .toList();
         if (todayEvents.isEmpty()) return false;
 
-        // 组装日历推送消息
-        StringBuilder sb = new StringBuilder();
-        for (EventEntity e : todayEvents) {
-            sb.append("⏰ 今天").append(e.getTitle());
-            if (e.getContent() != null && !e.getContent().isBlank()) {
-                sb.append("（").append(e.getContent()).append("）");
-            }
-            sb.append("～");
-            if (todayEvents.size() > 1) sb.append("\n");
-        }
-        sendPush(userId, sb.toString().trim());
+        // 让 LLM 结合人设 + 记忆生成自然关心的消息
+        String persona = companionService.loadPersona();
+        String history = companionService.getRecentHistory(userId);
+        String eventsText = todayEvents.stream()
+            .map(e -> e.getTitle() + (e.getContent() != null && !e.getContent().isBlank()
+                ? "：" + e.getContent() : ""))
+            .reduce((a, b) -> a + "；" + b).orElse("");
+
+        String prompt = """
+            %s
+
+            今天是 %s，你和对方的聊天中，今天对对方来说有这些特别的日子：
+            %s
+
+            你们最近的对话：
+            %s
+
+            请你用自然的语气给对方发一条消息，把关心和祝福融进日常对话里。
+            要求：不机械、不死板、像真人一样自然地提起今天是ta的XXX，不要用"⏰"这种图标，
+            不要用"今天是XXX～"这种模板语气。可以撒娇、可以调皮、可以温柔，但要把心意表达出来。
+            严格只输出你要发的那条消息：
+            """.formatted(persona, today, eventsText,
+            history.isEmpty() ? "（暂无最近对话）" : history);
+
+        String llmMessage = companionService.generateMessage(prompt);
+        if (llmMessage == null || llmMessage.isBlank()) return false;
+
+        sendPush(userId, llmMessage);
         return true;
     }
 

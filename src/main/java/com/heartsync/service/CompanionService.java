@@ -113,6 +113,28 @@ public class CompanionService {
         return lastInteractionTime.get(userId);
     }
 
+    /** 加载人设 prompt，供外部（如 PushService）使用 */
+    public String loadPersona() {
+        return personaService.loadSystemPrompt();
+    }
+
+    /** 获取用户最近对话的文本渲染，供外部（如 PushService）使用 */
+    public String getRecentHistory(String userId) {
+        List<ChatMessage> history = memory(userId).messages();
+        if (history.isEmpty()) return "";
+        return renderHistory(history);
+    }
+
+    /** 同步调用 LLM 生成日历推送消息 */
+    public String generateMessage(String prompt) {
+        try {
+            return llmClient.complete(prompt);
+        } catch (Exception e) {
+            log.warn("日历消息生成失败", e);
+            return null;
+        }
+    }
+
     /**
      * 主动消息决策：判断此刻要不要主动给用户发消息，要发则返回内容
      * 规则闸门由 PushService 把关，这里只做「结合上下文的 LLM 拟人判断」

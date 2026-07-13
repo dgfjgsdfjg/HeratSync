@@ -1,15 +1,13 @@
 package com.heartsync.service;
 
-import dev.langchain4j.data.message.AiMessage;
-import dev.langchain4j.model.chat.ChatLanguageModel;
-import dev.langchain4j.model.chat.StreamingChatLanguageModel;
-import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
-import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.chat.ChatLanguageModel;
+import dev.langchain4j.model.chat.StreamingChatLanguageModel;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
+import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
@@ -41,19 +39,14 @@ public class LlmClient {
 
     /**
      * 流式对话，返回 token 流
-     * @param userMessage 用户输入
-     * @param systemPrompt 系统人设 prompt
-     * @param history 最近 10 轮对话历史（UserMessage/AiMessage 交替）
-     * @param memories 召回的 Vault 记忆片段文本
-     * @return Flux<String> token 流
      */
     public Flux<String> streamResponse(String userMessage, String systemPrompt,
-                                        List<dev.langchain4j.data.message.ChatMessage> history,
+                                        List<ChatMessage> history,
                                         String memories) {
         Sinks.Many<String> sink = Sinks.many().unicast().onBackpressureBuffer();
 
         // 拼装完整消息列表
-        List<dev.langchain4j.data.message.ChatMessage> messages = new ArrayList<>();
+        List<ChatMessage> messages = new ArrayList<>();
 
         // 1. system prompt（人设 + 记忆）
         StringBuilder fullSystem = new StringBuilder(systemPrompt);
@@ -76,7 +69,7 @@ public class LlmClient {
             }
 
             @Override
-            public void onCompleteResponse(dev.langchain4j.model.chat.response.ChatResponse response) {
+            public void onCompleteResponse(ChatResponse response) {
                 sink.tryEmitComplete();
                 log.info("LLM 流式回复完成");
             }
@@ -92,15 +85,13 @@ public class LlmClient {
     }
 
     /**
-     * 同步补全：给一个 prompt，阻塞返回完整回复
-     * 直接调 ChatLanguageModel.generate()，用于记忆事实抽取等非流式场景
-     * @param prompt 单轮提示词
-     * @return 完整回复文本；失败返回空串
+     * 同步补全：给一个 prompt，阻塞返回完整回复。
+     * 直接调 ChatLanguageModel.chat()，用于记忆事实抽取等非流式场景。
      */
     public String complete(String prompt) {
         if (prompt == null || prompt.isBlank()) return "";
         try {
-            dev.langchain4j.model.chat.response.ChatResponse resp = syncModel.chat(new UserMessage(prompt));
+            ChatResponse resp = syncModel.chat(new UserMessage(prompt));
             if (resp != null && resp.aiMessage() != null) {
                 return resp.aiMessage().text();
             }

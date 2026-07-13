@@ -7,9 +7,9 @@ import dev.langchain4j.store.memory.chat.ChatMemoryStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * LangChain4j ChatMemoryStore 的 SQLite 实现
@@ -20,6 +20,8 @@ public class SqliteChatMemoryStore implements ChatMemoryStore {
     private static final int LOAD_ROUNDS = 10;
 
     private final ConversationStore conversationStore;
+    /** 每条用户最后持久化时的消息条数，用于增量写入防重复 */
+    private final ConcurrentHashMap<String, Integer> lastPersistedSize = new ConcurrentHashMap<>();
 
     public SqliteChatMemoryStore(ConversationStore conversationStore) {
         this.conversationStore = conversationStore;
@@ -32,7 +34,10 @@ public class SqliteChatMemoryStore implements ChatMemoryStore {
     public List<ChatMessage> getMessages(Object memoryId) {
         if (memoryId == null) return Collections.emptyList();
         try {
-            return conversationStore.loadRecent(memoryId.toString(), LOAD_ROUNDS);
+            List<ChatMessage> msgs = conversationStore.loadRecent(memoryId.toString(), LOAD_ROUNDS);
+            // 记录当前已持久化的条数
+            lastPersistedSize.put(memoryId.toString(), msgs.size());
+            return msgs;
         } catch (Exception e) {
             log.error("加载对话历史失败, userId={}", memoryId, e);
             return Collections.emptyList();
@@ -40,29 +45,20 @@ public class SqliteChatMemoryStore implements ChatMemoryStore {
     }
 
     /**
-     * 写入对话变更：只追加新增的消息（首尾各一轮）
+     * 增量写入：只持久化新增的消息，防止每次 add 都重复写
      */
     @Override
     public void updateMessages(Object memoryId, List<ChatMessage> messages) {
         if (memoryId == null || messages == null || messages.isEmpty()) return;
         String userId = memoryId.toString();
-        try {
-            // ChatMemory 回调时会传全量消息列表，
-            // 这里做增量持久化：只追加列表中末两条（最新一轮）
-            int size = messages.size();
-            if (size >= 1) {
-                ChatMessage last = messages.get(size - 1);
-                String role = (last instanceof AiMessage) ? ConversationStore.ROLE_AI : ConversationStore.ROLE_USER;
-                conversationStore.append(userId, role, textOf(last));
-            }
-            if (size >= 2) {
-                ChatMessage secondLast = messages.get(size - 2);
-                String role = (secondLast instanceof AiMessage) ? ConversationStore.ROLE_AI : ConversationStore.ROLE_USER;
-                conversationStore.append(userId, role, textOf(secondLast));
-            }
-        } catch (Exception e) {
-            log.error("持久化对话失败, userId={}", userId, e);
+        int prevSize = lastPersistedSize.getOrDefault(userId, 0);
+        // 新消息从 prevSize 开始，已持久化的跳过
+        for (int i = prevSize; i < messages.size(); i++) {
+            ChatMessage msg = messages.get(i);
+            String role = (msg instanceof AiMessage) ? ConversationStore.ROLE_AI : ConversationStore.ROLE_USER;
+            conversationStore.append(userId, role, textOf(msg));
         }
+        lastPersistedSize.put(userId, messages.size());
     }
 
     /**

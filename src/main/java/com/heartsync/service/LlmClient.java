@@ -84,21 +84,30 @@ public class LlmClient {
         return sink.asFlux();
     }
 
+    private static final int SYNC_MAX_RETRIES = 1;  // 失败后重试 1 次
+
     /**
      * 同步补全：给一个 prompt，阻塞返回完整回复。
-     * 直接调 ChatLanguageModel.chat()，用于记忆事实抽取等非流式场景。
+     * 带一次重试，用于记忆事实抽取等非流式场景。
      */
     public String complete(String prompt) {
         if (prompt == null || prompt.isBlank()) return "";
-        try {
-            ChatResponse resp = syncModel.chat(new UserMessage(prompt));
-            if (resp != null && resp.aiMessage() != null) {
-                return resp.aiMessage().text();
+        for (int attempt = 0; attempt <= SYNC_MAX_RETRIES; attempt++) {
+            try {
+                ChatResponse resp = syncModel.chat(new UserMessage(prompt));
+                if (resp != null && resp.aiMessage() != null) {
+                    return resp.aiMessage().text();
+                }
+                return "";
+            } catch (Exception e) {
+                if (attempt < SYNC_MAX_RETRIES) {
+                    log.warn("同步补全失败(第{}次), 50ms 后重试", attempt + 1);
+                    try { Thread.sleep(50); } catch (InterruptedException ignored) {}
+                } else {
+                    log.warn("同步补全失败，已达最大重试次数", e);
+                }
             }
-            return "";
-        } catch (Exception e) {
-            log.warn("同步补全失败, prompt 长度={}", prompt.length(), e);
-            return "";
         }
+        return "";
     }
 }

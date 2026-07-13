@@ -2,6 +2,7 @@ package com.heartsync.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.heartsync.model.ChatMessage;
+import com.heartsync.model.EventEntity;
 import com.heartsync.netty.WsSessionManager;
 import io.netty.channel.Channel;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
@@ -12,6 +13,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -29,6 +31,8 @@ public class PushService {
 
     private final WsSessionManager sessionManager;
     private final CompanionService companionService;
+    /** 事件存储，用于每日日历检查 */
+    private final EventStore eventStore;
 
     // 配置项（application.yml 的 heartsync.push.*，可自行修改）
     private final boolean enabled;
@@ -45,6 +49,7 @@ public class PushService {
     public PushService(
         WsSessionManager sessionManager,
         CompanionService companionService,
+        EventStore eventStore,
         @Value("${heartsync.push.enabled:true}") boolean enabled,
         @Value("${heartsync.push.quiet-period-seconds:300}") int quietPeriodSeconds,
         @Value("${heartsync.push.cooldown-seconds:720}") int cooldownSeconds,
@@ -55,6 +60,7 @@ public class PushService {
     ) {
         this.sessionManager = sessionManager;
         this.companionService = companionService;
+        this.eventStore = eventStore;
         this.enabled = enabled;
         this.quietPeriodSeconds = quietPeriodSeconds;
         this.cooldownSeconds = cooldownSeconds;
@@ -69,21 +75,46 @@ public class PushService {
      */
     @Scheduled(fixedRateString = "${heartsync.push.poll-interval-ms:60000}")
     public void checkAndPush() {
-        if (!enabled) {
-            return;
-        }
-        // 免打扰时段：直接跳过
-        if (inQuietHours()) {
-            return;
-        }
+        if (!enabled) return;
+        if (inQuietHours()) return;
+
         Set<String> onlineUsers = sessionManager.getOnlineUsers();
         for (String userId : onlineUsers) {
             try {
+                // 优先：检查今天是否有日历事件（生日/纪念日等），有则推且跳过冷却
+                if (tryCalendarPush(userId)) continue;
+                // 常规：LLM 决策推不推
                 tryPushForUser(userId);
             } catch (Exception e) {
                 log.error("主动推送处理异常, userId={}", userId, e);
             }
         }
+    }
+
+    /**
+     * 检查用户今天是否有事件（生日/纪念日等），有则直接推送
+     * @return true 表示已推送日历消息
+     */
+    private boolean tryCalendarPush(String userId) {
+        if (eventStore == null) return false;
+        String today = java.time.LocalDate.now().toString();
+        List<EventEntity> todayEvents = eventStore.todayAndUpcoming(userId).stream()
+            .filter(e -> today.equals(e.getEventDate()))
+            .toList();
+        if (todayEvents.isEmpty()) return false;
+
+        // 组装日历推送消息
+        StringBuilder sb = new StringBuilder();
+        for (EventEntity e : todayEvents) {
+            sb.append("⏰ 今天").append(e.getTitle());
+            if (e.getContent() != null && !e.getContent().isBlank()) {
+                sb.append("（").append(e.getContent()).append("）");
+            }
+            sb.append("～");
+            if (todayEvents.size() > 1) sb.append("\n");
+        }
+        sendPush(userId, sb.toString().trim());
+        return true;
     }
 
     /**

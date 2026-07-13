@@ -3,15 +3,15 @@ package com.heartsync.service;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.memory.ChatMemory;
+import dev.langchain4j.memory.chat.MessageWindowChatMemory;
+import dev.langchain4j.store.memory.chat.ChatMemoryStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 
-import java.time.Instant;
 import java.time.LocalDateTime;
-import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -23,34 +23,45 @@ import java.util.concurrent.ConcurrentHashMap;
 @Service
 public class CompanionService {
     private static final Logger log = LoggerFactory.getLogger(CompanionService.class);
-    private static final int MAX_HISTORY_ROUNDS = 10; // 最多保留 10 轮对话
-    private static final int MAX_HISTORY_MESSAGES = MAX_HISTORY_ROUNDS * 2; // 用户+AI 各一条
+    private static final int MAX_HISTORY_MESSAGES = 20; // 最多保留 10 轮对话（用户+AI 各一条）
 
     private final MemoryService memoryService;
     private final PersonaService personaService;
     private final LlmClient llmClient;
-    /** 对话持久化存储；可为 null（测试时不注入） */
-    private final ConversationStore conversationStore;
-    /** 启动/会话恢复时从库载入最近 N 轮到窗口 */
-    private final int loadRounds;
+    /** LangChain4j ChatMemory 持久化存储（SQLite），null 时纯内存 */
+    private final ChatMemoryStore chatMemoryStore;
 
-    // 会话历史：userId -> 消息列表（ponytail: 内存 Map，单机够用，阶段 2 上 Redis）
-    private final Map<String, List<ChatMessage>> conversationHistory = new ConcurrentHashMap<>();
+    // 每家用户一个 ChatMemory 实例（内存窗口 + SQLite 持久化）
+    private final Map<String, ChatMemory> chatMemories = new ConcurrentHashMap<>();
 
-    // 上次互动时间：userId -> 时刻（主动推送的静默期判断用）
+    // 上次互动时间：userId -> 时刻（主动推送静默期判断用）
     private final Map<String, LocalDateTime> lastInteractionTime = new ConcurrentHashMap<>();
 
-    // 标记已从库恢复过该用户（避免重复查库）
-    private final Set<String> historyLoaded = ConcurrentHashMap.newKeySet();
-
     public CompanionService(MemoryService memoryService, PersonaService personaService,
-                            LlmClient llmClient, ConversationStore conversationStore,
-                            @Value("${heartsync.conversation.load-rounds:10}") int loadRounds) {
+                            LlmClient llmClient, ConversationStore conversationStore) {
         this.memoryService = memoryService;
         this.personaService = personaService;
         this.llmClient = llmClient;
-        this.conversationStore = conversationStore;
-        this.loadRounds = loadRounds;
+        // conversationStore 不为 null 时才启用持久化（测试环境可为 null）
+        this.chatMemoryStore = conversationStore != null
+            ? new SqliteChatMemoryStore(conversationStore) : null;
+    }
+
+    /**
+     * 获取或创建用户的 ChatMemory
+     */
+    private ChatMemory memory(String userId) {
+        return chatMemories.computeIfAbsent(userId, id -> {
+            var builder = MessageWindowChatMemory.builder()
+                .id(id)
+                .maxMessages(MAX_HISTORY_MESSAGES);
+            if (chatMemoryStore != null) {
+                builder.chatMemoryStore(chatMemoryStore);
+            }
+            ChatMemory mem = builder.build();
+            log.info("ChatMemory 初始化: userId={}, historySize={}", id, mem.messages().size());
+            return mem;
+        });
     }
 
     /**
@@ -62,8 +73,7 @@ public class CompanionService {
     public Flux<String> chat(String userId, String message) {
         log.info("用户消息: userId={}, message={}", userId, message);
 
-        // 确保历史已从库恢复（仅首次，幂等）
-        ensureHistoryLoaded(userId);
+        ChatMemory mem = memory(userId);
 
         // 1. 记忆召回
         String memories = memoryService.recall(message, userId);
@@ -71,9 +81,8 @@ public class CompanionService {
         // 2. 装载人设
         String systemPrompt = personaService.loadSystemPrompt();
 
-        // 3. 获取历史对话
-        List<ChatMessage> history = conversationHistory
-            .getOrDefault(userId, Collections.emptyList());
+        // 3. 获取历史对话（ChatMemory 首次从 SQLite 加载 + 自动窗口裁剪）
+        List<ChatMessage> history = mem.messages();
 
         // 4. 流式调用 LLM
         return llmClient.streamResponse(message, systemPrompt, history, memories);
@@ -83,59 +92,18 @@ public class CompanionService {
      * 对话完成回调：将本轮加入内存窗口 + 持久化 + 异步记忆写回
      */
     public void onChatComplete(String userId, String userMessage, String aiResponse) {
-        // 1. 更新内存对话历史窗口
-        List<ChatMessage> history = conversationHistory
-            .computeIfAbsent(userId, k -> new ArrayList<>());
-        history.add(new UserMessage(userMessage));
-        history.add(new AiMessage(aiResponse));
+        ChatMemory mem = memory(userId);
+        // ChatMemory.add() 自动触发滑动窗口裁剪 + ChatMemoryStore 持久化
+        mem.add(new UserMessage(userMessage));
+        mem.add(new AiMessage(aiResponse));
 
-        // 滑动窗口：超过最大轮数时移除最早的
-        while (history.size() > MAX_HISTORY_MESSAGES) {
-            history.remove(0);
-        }
-
-        // 2. 持久化本轮对话（异步不阻塞，失败不影响主流程）
-        if (conversationStore != null) {
-            try {
-                conversationStore.append(userId, ConversationStore.ROLE_USER, userMessage);
-                conversationStore.append(userId, ConversationStore.ROLE_AI, aiResponse);
-            } catch (Exception e) {
-                log.error("对话持久化失败, userId={}", userId, e);
-            }
-        }
-
-        // 3. 更新状态 + 上次互动记忆
-        personaService.updateStateField("上次互动", LocalDateTime.now().toString());
+        // 更新上次互动时间（主动推送用）
         lastInteractionTime.put(userId, LocalDateTime.now());
 
-        // 4. 异步记忆写回（抽取事实 + 事件）
+        // 异步记忆写回（抽取事实 + 事件）
         memoryService.remember(userId, userMessage, aiResponse);
 
-        log.info("对话完成: userId={}, historySize={}", userId, history.size());
-    }
-
-    /**
-     * 从库载入某用户最近 N 轮对话到内存窗口（仅首次）
-     */
-    private void ensureHistoryLoaded(String userId) {
-        if (conversationStore == null || !historyLoaded.add(userId)) {
-            return;
-        }
-        try {
-            List<ChatMessage> loaded = conversationStore.loadRecent(userId, loadRounds);
-            if (!loaded.isEmpty()) {
-                conversationHistory.putIfAbsent(userId, loaded);
-                // 用最后一条的时间戳恢复 lastInteractionTime
-                Long lastTs = conversationStore.lastTs(userId);
-                if (lastTs != null) {
-                    lastInteractionTime.putIfAbsent(userId,
-                        LocalDateTime.ofInstant(Instant.ofEpochMilli(lastTs), ZoneId.systemDefault()));
-                }
-                log.info("对话历史从库恢复: userId={}, rounds={}", userId, loaded.size() / 2);
-            }
-        } catch (Exception e) {
-            log.error("对话历史载入失败, userId={}", userId, e);
-        }
+        log.info("对话完成: userId={}, historySize={}", userId, mem.messages().size());
     }
 
     /**
@@ -152,7 +120,7 @@ public class CompanionService {
      * @return 要发的消息文本；判断不该发时返回空
      */
     public Optional<String> decideProactiveMessage(String userId) {
-        List<ChatMessage> history = conversationHistory.getOrDefault(userId, Collections.emptyList());
+        List<ChatMessage> history = memory(userId).messages();
         // 没聊过就不主动搭话（没有可参考的上下文，硬发很人机）
         if (history.isEmpty()) {
             return Optional.empty();
@@ -265,6 +233,6 @@ public class CompanionService {
      * 获取历史对话轮数（测试用）
      */
     public int getHistorySize(String userId) {
-        return conversationHistory.getOrDefault(userId, Collections.emptyList()).size();
+        return memory(userId).messages().size();
     }
 }

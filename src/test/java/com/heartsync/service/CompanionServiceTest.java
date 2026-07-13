@@ -48,7 +48,7 @@ class CompanionServiceTest {
                 return Flux.just("抱", "抱", "你");
             }
         };
-        companionService = new CompanionService(memoryService, personaService, llmClient, null, 10);
+        companionService = new CompanionService(memoryService, personaService, llmClient, null);
     }
 
     @Test

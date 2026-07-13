@@ -1,10 +1,14 @@
 package com.heartsync.service;
 
+import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.model.chat.ChatLanguageModel;
 import dev.langchain4j.model.chat.StreamingChatLanguageModel;
 import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -14,7 +18,6 @@ import reactor.core.publisher.Sinks;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.CompletableFuture;
 
 /**
  * DeepSeek 流式 LLM 调用封装
@@ -24,6 +27,7 @@ public class LlmClient {
     private static final Logger log = LoggerFactory.getLogger(LlmClient.class);
 
     private final StreamingChatLanguageModel model;
+    private final ChatLanguageModel syncModel;  // 同一实例，用同步接口
 
     public LlmClient(String apiKey, String baseUrl, String modelName) {
         this.model = OpenAiStreamingChatModel.builder()
@@ -32,6 +36,7 @@ public class LlmClient {
             .modelName(modelName)
             .timeout(Duration.ofSeconds(60))
             .build();
+        this.syncModel = this.model;  // StreamingChatLanguageModel extends ChatLanguageModel
     }
 
     /**
@@ -88,38 +93,20 @@ public class LlmClient {
 
     /**
      * 同步补全：给一个 prompt，阻塞返回完整回复
-     * 复用流式 model，收集全部 token 后拼成整串，用于记忆事实抽取等非流式场景
+     * 直接调 ChatLanguageModel.generate()，用于记忆事实抽取等非流式场景
      * @param prompt 单轮提示词
      * @return 完整回复文本；失败返回空串
      */
     public String complete(String prompt) {
-        CompletableFuture<String> future = new CompletableFuture<>();
-        StringBuilder sb = new StringBuilder();
-        List<dev.langchain4j.data.message.ChatMessage> messages = new ArrayList<>();
-        messages.add(new UserMessage(prompt));
-
-        model.chat(messages, new StreamingChatResponseHandler() {
-            @Override
-            public void onPartialResponse(String partialResponse) {
-                sb.append(partialResponse);
-            }
-
-            @Override
-            public void onCompleteResponse(dev.langchain4j.model.chat.response.ChatResponse response) {
-                future.complete(sb.toString());
-            }
-
-            @Override
-            public void onError(Throwable error) {
-                future.completeExceptionally(error);
-            }
-        });
-
+        if (prompt == null || prompt.isBlank()) return "";
         try {
-            // 阻塞等待，最多 60 秒
-            return future.get(60, java.util.concurrent.TimeUnit.SECONDS);
+            dev.langchain4j.model.chat.response.ChatResponse resp = syncModel.chat(new UserMessage(prompt));
+            if (resp != null && resp.aiMessage() != null) {
+                return resp.aiMessage().text();
+            }
+            return "";
         } catch (Exception e) {
-            log.error("同步补全失败, prompt={}", prompt, e);
+            log.warn("同步补全失败, prompt 长度={}", prompt.length(), e);
             return "";
         }
     }
